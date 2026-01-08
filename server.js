@@ -989,7 +989,7 @@ if (msg.type === "skill1Cast") {
   p.skill1CdUntilMs = startMs + SKILL1_COOLDOWN_MS;
 
   // Tell caster timings for UI
-  send(ws, { type: "skill1Accepted", center: { x, y }, startMs, endMs, cdUntilMs: p.skill1CdUntilMs });
+  send(ws, { type: "skill1Accepted", center: { x, y }, startMs, endMs, cdUntilMs: p.skill1CdUntilMs, serverNowMs: Date.now() });
   return;
 }
 
@@ -1454,7 +1454,7 @@ const TICK_HZ = 30;
       caster.skill1CdUntilMs = startMs + SKILL1_COOLDOWN_MS;
 
       const ws = idToSocket.get(caster.id);
-      if (ws) send(ws, { type: "skill1Accepted", center: { x, y }, startMs, endMs, cdUntilMs: caster.skill1CdUntilMs });
+      if (ws) send(ws, { type: "skill1Accepted", center: { x, y }, startMs, endMs, cdUntilMs: caster.skill1CdUntilMs, serverNowMs: Date.now() });
 
       return true;
     }
@@ -1932,6 +1932,7 @@ setInterval(() => {
       mapH: m.h,
       tileSize: TILE,
       portalTile: PORTAL_TILE,
+      serverNowMs: Date.now(),
 
 // active skill instances (map-scoped)
 whirlpools: Array.from(whirlpools.values())
