@@ -884,6 +884,7 @@ skill1CdUntilMs: 0,
     mapH: m.h,
     playerRadius: PLAYER_RADIUS,
     portalTile: PORTAL_TILE,
+      serverNowMs: Date.now(),
     weapons: WEAPONS,
   });
 
