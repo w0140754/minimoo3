@@ -9,8 +9,8 @@
   </style>
 </head>
 <body>
-  <h1</h1>
-  <p></p>
+  <h1>Mini MMO</h1>
+  <p>WASD / Arrow keys • Press <b>E</b> near NPC / portal • Left-click to attack • Press <b>I</b> for inventory</p>
   <canvas id="c" width="800" height="600"></canvas>
 
 <script>
@@ -649,7 +649,8 @@ const mobSpawnAtMs = new Map(); // mobId -> performance.now() when it became ali
 let worldDrops = {};
 let worldProjectiles = {};
 let whirlpools = []; // active skill1 vortices from server [{x,y,rad,endMs,...}]
-let serverTimeOffsetMs = 0; // (server epoch ms) - (client Date.now) estimated from snapshots
+let serverTimeOffsetMs = 0; // (server epoch ms) - (client Date.now) estimated from snapshots/skill messages
+
 
 const netState = new Map();
 
@@ -796,6 +797,12 @@ let levelToastText = "";
 ws.onmessage = (e) => {
   const msg = JSON.parse(e.data);
 
+  // Global server clock sync (any message may carry serverNowMs)
+  if (typeof msg.serverNowMs === "number") {
+    const off = msg.serverNowMs - Date.now();
+    serverTimeOffsetMs = (serverTimeOffsetMs === 0) ? off : (serverTimeOffsetMs * 0.9 + off * 0.1);
+  }
+
   if (msg.type === "nameRejected") {
     // Re-prompt (server-side validation is source of truth)
     nameSent = false;
@@ -831,16 +838,17 @@ ws.onmessage = (e) => {
     if (msg.map) map = msg.map;
     if (msg.objMap) objMap = msg.objMap;
 
-if (typeof msg.serverNowMs === "number") {
-  const off = msg.serverNowMs - Date.now();
-  // smooth a little to avoid jitter
-  serverTimeOffsetMs = serverTimeOffsetMs ? (serverTimeOffsetMs * 0.9 + off * 0.1) : off;
-}
+    // --- Server clock sync (fixes Render / cloud clock skew for skill animations) ---
+    if (typeof msg.serverNowMs === "number") {
+      const off = msg.serverNowMs - Date.now();
+      // light smoothing to avoid jitter if serverNowMs fluctuates
+      serverTimeOffsetMs = (serverTimeOffsetMs === 0) ? off : (serverTimeOffsetMs * 0.9 + off * 0.1);
+    }
 
-    if (Array.isArray(msg.whirlpools)) whirlpools = msg.whirlpools;
+if (Array.isArray(msg.whirlpools)) whirlpools = msg.whirlpools;
 
     // Skill 1 timers for local HUD/hotbar
-    const _nowAbs = Date.now();
+    const _nowAbs = Date.now() + serverTimeOffsetMs;
     if (typeof msg.selfSkill1ActiveUntilMs === "number") {
       skill1ActiveUntilMs = msg.selfSkill1ActiveUntilMs;
       if (skill1ActiveUntilMs > _nowAbs && skill1ActiveUntilMs !== _lastSkill1ActiveUntilMs) {
