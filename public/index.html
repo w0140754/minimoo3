@@ -9,8 +9,8 @@
   </style>
 </head>
 <body>
-  <h1>Mini MMO</h1>
-  <p>WASD / Arrow keys • Press <b>E</b> near NPC / portal • Left-click to attack • Press <b>I</b> for inventory</p>
+  <h1</h1>
+  <p></p>
   <canvas id="c" width="800" height="600"></canvas>
 
 <script>
@@ -649,6 +649,7 @@ const mobSpawnAtMs = new Map(); // mobId -> performance.now() when it became ali
 let worldDrops = {};
 let worldProjectiles = {};
 let whirlpools = []; // active skill1 vortices from server [{x,y,rad,endMs,...}]
+let serverTimeOffsetMs = 0; // (server epoch ms) - (client Date.now) estimated from snapshots
 
 const netState = new Map();
 
@@ -830,7 +831,13 @@ ws.onmessage = (e) => {
     if (msg.map) map = msg.map;
     if (msg.objMap) objMap = msg.objMap;
 
-if (Array.isArray(msg.whirlpools)) whirlpools = msg.whirlpools;
+if (typeof msg.serverNowMs === "number") {
+  const off = msg.serverNowMs - Date.now();
+  // smooth a little to avoid jitter
+  serverTimeOffsetMs = serverTimeOffsetMs ? (serverTimeOffsetMs * 0.9 + off * 0.1) : off;
+}
+
+    if (Array.isArray(msg.whirlpools)) whirlpools = msg.whirlpools;
 
     // Skill 1 timers for local HUD/hotbar
     const _nowAbs = Date.now();
@@ -1612,7 +1619,7 @@ const cy = w.y;
 const r = w.rad || SKILL1_EFFECT_RADIUS_PX;
 
 // Use epoch time for server-authored startMs/endMs (they are Date.now()-based)
-const nowAbsMs = Date.now();
+const nowAbsMs = Date.now() + serverTimeOffsetMs;
 const elapsed = Math.max(0, nowAbsMs - (w.startMs || nowAbsMs));
 
 // Animated black hole spritesheet (8 frames, vertical strip)
