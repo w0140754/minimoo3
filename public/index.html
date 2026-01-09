@@ -243,7 +243,7 @@ function snap2(x, y) { return { x: Math.round(x), y: Math.round(y) }; }
 // Show mob HP bars if you're nearby OR the mob is currently aggro/provoked.
 function shouldShowMobHp(mob, me, wx, wy) {
   // Server sets aggroUntil when a mob is provoked (eg, after being hit)
-  if (mob && typeof mob.aggroUntil === "number" && mob.aggroUntil > Date.now()) return true;
+  if (mob && typeof mob.aggroUntil === "number" && mob.aggroUntil > serverNowMs()) return true;
   if (!me) return true;
   return dist(me.x, me.y, wx, wy) <= MOB_HPBAR_DIST;
 }
@@ -668,6 +668,13 @@ function drawFadeOverlay() {
 const wsProto = (location.protocol === "https:") ? "wss" : "ws";
 const ws = new WebSocket(`${wsProto}://${location.host}`);
 
+// --- Server clock sync (Render can be ~0-2s ahead/behind your PC clock).
+// Server timestamps (startMs/endMs/cooldowns) are serverNowMs()-based epoch ms.
+// We estimate the offset so visuals/cooldowns line up instantly everywhere.
+let serverClockOffsetMs = 0; // localNow - serverNow
+let haveServerClock = false;
+function serverNowMs() { return Date.now() - serverClockOffsetMs; }
+
 let myName = null;
 let nameSent = false;
 
@@ -890,6 +897,12 @@ ws.onmessage = (e) => {
   }
 
   if (msg.type === "snapshot") {
+    if (typeof msg.nowMs === "number") {
+      const sample = Date.now() - msg.nowMs; // local - server
+      if (!haveServerClock) { serverClockOffsetMs = sample; haveServerClock = true; }
+      else { serverClockOffsetMs = serverClockOffsetMs * 0.9 + sample * 0.1; } // smooth
+    }
+
     const now = performance.now() / 1000;
 
     const newMapId = msg.mapId ?? currentMapId;
@@ -902,7 +915,7 @@ ws.onmessage = (e) => {
 if (Array.isArray(msg.whirlpools)) whirlpools = msg.whirlpools;
 
     // Skill 1 timers for local HUD/hotbar
-    const _nowAbs = Date.now();
+    const _nowAbs = serverNowMs();
     if (typeof msg.selfSkill1ActiveUntilMs === "number") {
       skill1ActiveUntilMs = msg.selfSkill1ActiveUntilMs;
       if (skill1ActiveUntilMs > _nowAbs && skill1ActiveUntilMs !== _lastSkill1ActiveUntilMs) {
@@ -1342,7 +1355,7 @@ if (k === "i") {
   if (e.key === "1") {
     e.preventDefault();
     if (!e.repeat) {
-      const nowAbs = Date.now();
+      const nowAbs = serverNowMs();
       const nowUi = performance.now();
 
       // Respect server-authored timers (epoch ms)
@@ -1374,7 +1387,7 @@ if (k === "i") {
   if (e.key === "2") {
     e.preventDefault();
     if (!e.repeat) {
-      const nowAbs = Date.now();
+      const nowAbs = serverNowMs();
       const nowUi = performance.now();
 
       if (nowAbs < skill2CdUntilMs) {
@@ -1776,8 +1789,8 @@ const cx = w.x;
 const cy = w.y;
 const r = w.rad || SKILL1_EFFECT_RADIUS_PX;
 
-// Use epoch time for server-authored startMs/endMs (they are Date.now()-based)
-const nowAbsMs = Date.now();
+// Use epoch time for server-authored startMs/endMs (they are serverNowMs()-based)
+const nowAbsMs = serverNowMs();
 const elapsed = Math.max(0, nowAbsMs - (w.startMs || nowAbsMs));
 
 // Animated black hole spritesheet (8 frames, vertical strip)
@@ -2200,7 +2213,7 @@ function drawSpearThrust(x, y, dir, phase01, spearImg, playerId) {
   const sid = (playerId != null) ? String(playerId) : null;
   const fx = sid ? skill2FxByCaster.get(sid) : null;
   if (fx && typeof fx.startMs === "number") {
-    const tAbs = Date.now() - fx.startMs;
+    const tAbs = serverNowMs() - fx.startMs;
     if (tAbs >= 0 && tAbs <= SKILL2_VIS_MS) {
       // Two windows: stab 0 then stab 1
       const stabIndex = (tAbs < SKILL2_GAP_MS) ? 0 : 1;
@@ -2472,7 +2485,7 @@ function drawDialogueBubble(d) {
 
 function drawSkillHotbar() {
   // Bottom-left hotbar slots for Skill 1 and Skill 2
-  const now = Date.now();
+  const now = serverNowMs();
   const nowUi = performance.now();
 
   const slot = 48;
