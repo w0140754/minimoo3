@@ -50,6 +50,8 @@ const wss = new WebSocketServer({ server });
 ====================== */
 const TILE = 64;
 const PORTAL_TILE = 3;
+// Map editor: allow painting any ground tile id up to this value (client will only show what exists in tiles.png)
+const EDITOR_MAX_GROUND_TILE = 999;
 function makeBorderMap(w, h) {
   const map = Array.from({ length: h }, () => Array(w).fill(0));
   for (let y = 0; y < h; y++) {
@@ -562,6 +564,14 @@ function meleeHitTest(p, m, offset, radius) {
 }
 
 
+function meleeHitTestDir(p, m, dir, offset, radius) {
+  const f = norm(dir || { x: 0, y: 1 });
+  const cx = p.x + f.x * offset;
+  const cy = p.y + f.y * offset;
+  const mr = (m && Number.isFinite(m.radius)) ? m.radius : MOB_RADIUS;
+  return dist(cx, cy, m.x, m.y) <= (radius + mr);
+}
+
 // Sword is a wide "slash" rather than a straight poke.
 // We approximate an arc by testing a few overlapping circles:
 // one forward, plus two slightly to the sides.
@@ -855,6 +865,7 @@ wss.on("connection", (ws) => {
 // skills (server authoritative timers)
 skill1ActiveUntilMs: 0,
 skill1CdUntilMs: 0,
+skill2CdUntilMs: 0,
 
 // combat timers
 
@@ -878,13 +889,11 @@ skill1CdUntilMs: 0,
     map: m.map,
     objMap: m.obj,
     portals: m.portals || [],
-    portals: m.portals || [],
     tileSize: TILE,
     mapW: m.w,
     mapH: m.h,
     playerRadius: PLAYER_RADIUS,
     portalTile: PORTAL_TILE,
-      serverNowMs: Date.now(),
     weapons: WEAPONS,
   });
 
@@ -989,7 +998,140 @@ if (msg.type === "skill1Cast") {
   p.skill1CdUntilMs = startMs + SKILL1_COOLDOWN_MS;
 
   // Tell caster timings for UI
-  send(ws, { type: "skill1Accepted", center: { x, y }, startMs, endMs, cdUntilMs: p.skill1CdUntilMs, serverNowMs: Date.now() });
+  send(ws, { type: "skill1Accepted", center: { x, y }, startMs, endMs, cdUntilMs: p.skill1CdUntilMs });
+  
+  return;
+}
+
+if (msg.type === "skill2DoubleStab") {
+  if (p.hp <= 0 || p.respawnIn > 0) return;
+
+  // Must have a spear equipped
+  const equippedWeaponId = p.equipment?.weapon;
+  const equippedDef = equippedWeaponId ? ITEMS[equippedWeaponId] : null;
+  const weaponKey = equippedDef?.weaponKey || null;
+  if (weaponKey !== "spear") {
+    send(ws, { type: "skill2Rejected", reason: "Equip a spear to use Skill 2." });
+    return;
+  }
+
+  const nowMs = Date.now();
+  if (nowMs < (p.skill2CdUntilMs || 0)) {
+    send(ws, { type: "skill2Rejected", reason: "Skill 2 is on cooldown." });
+    return;
+  }
+
+  const startMs = nowMs;
+  p.skill2CdUntilMs = startMs + SKILL2_COOLDOWN_MS;
+
+
+  // Optional aim from client (same logic as regular attack)
+  // For spear skills we snap to cardinal directions so the hitbox matches your normal melee behavior.
+  const aimDirX = Number(msg.aimDirX);
+  const aimDirY = Number(msg.aimDirY);
+  const hasAimDir =
+    Number.isFinite(aimDirX) &&
+    Number.isFinite(aimDirY) &&
+    (Math.abs(aimDirX) + Math.abs(aimDirY) > 1e-6);
+
+  const aimX = Number(msg.aimX);
+  const aimY = Number(msg.aimY);
+  const hasAim = Number.isFinite(aimX) && Number.isFinite(aimY);
+
+  if (hasAimDir) {
+    const dx = aimDirX;
+    const dy = aimDirY;
+    const ax = Math.abs(dx);
+    const ay = Math.abs(dy);
+    if (ax > ay) p.facing = { x: dx >= 0 ? 1 : -1, y: 0 };
+    else if (ay > 0) p.facing = { x: 0, y: dy >= 0 ? 1 : -1 };
+  } else if (hasAim) {
+    const dx = aimX - p.x;
+    const dy = aimY - p.y;
+    const ax = Math.abs(dx);
+    const ay = Math.abs(dy);
+    if (ax > ay) p.facing = { x: dx >= 0 ? 1 : -1, y: 0 };
+    else if (ay > 0) p.facing = { x: 0, y: dy >= 0 ? 1 : -1 };
+  }
+
+  // Cache a discrete attack direction for clients (used for rendering during atkAnim)
+  {
+    const fx = p.facing?.x ?? 0;
+    const fy = p.facing?.y ?? 0;
+    const ax = Math.abs(fx);
+    const ay = Math.abs(fy);
+    if (ax > ay) p.atkDir = (fx >= 0 ? "right" : "left");
+    else if (ay > 0) p.atkDir = (fy >= 0 ? "down" : "up");
+  }
+
+
+  // Broadcast for visuals (map-scoped)
+  broadcastToMap(p.mapId, { type: "skill2Fx", casterId: p.id, startMs });
+
+  // Helper: apply one stab with slight "jut"
+  const applyStab = (stabIndex) => {
+    // Animate like a regular spear attack (client reads p.atkAnim)
+    p.atkAnim = SKILL2_ATK_ANIM;
+
+    // Slightly rotate the facing vector so it "juts" a bit left/right
+    const f = norm(p.facing || { x: 0, y: 1 });
+    const a = (stabIndex === 0 ? -1 : 1) * SKILL2_JUT_ANGLE;
+    const dx = f.x * Math.cos(a) - f.y * Math.sin(a);
+    const dy = f.x * Math.sin(a) + f.y * Math.cos(a);
+    const dir = { x: dx, y: dy };
+
+    const OFFSET = SKILL2_SPEAR_OFFSET;
+    const RADIUS = SKILL2_SPEAR_RADIUS;
+
+    for (const m of mobs.values()) {
+      if (m.mapId !== p.mapId) continue;
+      if (m.respawnIn > 0) continue;
+      if (m.hp <= 0) continue;
+
+      if (meleeHitTestDir(p, m, dir, OFFSET, RADIUS)) {
+        const dmg = Math.max(1, Math.floor(p.atk * 0.9));
+        m.hp -= dmg;
+
+        // Aggro mobs on hit (same as regular spear)
+        m.aggroTarget = p.id;
+        m.aggroT = 7.0;
+
+        // Combat text / hit FX (match regular attacks: client listens for type:"hit")
+        broadcastToMap(p.mapId, {
+          type: "hit",
+          targetId: m.id,
+          targetKind: "mob",
+          srcX: p.x,
+          srcY: p.y,
+          amount: dmg,
+          fx: "stab",
+        });
+
+        if (m.hp <= 0) {
+          awardXp(p, 12);
+          const coins = 2 + Math.floor(Math.random() * 4);
+          spawnCoins(m.mapId, m.x, m.y, coins);
+          maybeDropOrangeFlan(m);
+          m.deadAtMs = Date.now();
+          m.corpseUntilMs = m.deadAtMs + 2000;
+          // Keep death/respawn behavior consistent with normal attacks
+          m.respawnIn = 5;
+        }
+      }
+    }
+  };
+
+  applyStab(0);
+  setTimeout(() => {
+    // if player moved maps / disconnected, stop second stab
+    const p2 = players.get(p.id);
+    if (!p2) return;
+    if (p2.mapId !== p.mapId) return;
+    applyStab(1);
+  }, SKILL2_GAP_MS);
+
+  // Tell caster cooldown timing for UI (optional; snapshot also carries it)
+  send(ws, { type: "skill2Accepted", cdUntilMs: p.skill2CdUntilMs });
   return;
 }
 
@@ -1079,7 +1221,9 @@ if (msg.type === "skill1Cast") {
       if (layer === "ground") {
         let ok = true;
         let reason = "ok";
-        if (tile !== 0 && tile !== 1) { ok = false; reason = "invalid_ground_tile"; }
+        if (tile < 0 || tile > EDITOR_MAX_GROUND_TILE) { ok = false; reason = "invalid_ground_tile"; }
+        // Don’t allow painting the portal tile via the editor (use code for portals)
+        if (tile === PORTAL_TILE) { ok = false; reason = "portal_tile_protected"; }
 
         if (MAP_EDITOR_DEBUG_LOG) {
           console.log(`[EDITOR] ${ok ? "ACCEPT" : "REJECT"} ground @${p.mapId} (${tx},${ty}) ${currGround} -> ${tile} (${reason})`);
@@ -1270,7 +1414,7 @@ if (hasAimDir) {
 
             // Orange slimes (and other passive mobs) only start fighting after being hit.
 
-            send(ws, {
+            broadcastToMap(p.mapId, {
               type: "hit",
               targetId: m.id,
               targetKind: "mob",
@@ -1311,15 +1455,15 @@ if (hasAimDir) {
 
             setMobAggro(m, p.id);
 
-            send(ws, {
-              type: "hit",
-              targetId: m.id,
-              targetKind: "mob",
-              srcX: p.x,
-              srcY: p.y,
-              amount: dmg,
-              fx: "stab",
-            });
+            broadcastToMap(p.mapId, {
+          type: "hit",
+          targetId: m.id,
+          targetKind: "mob",
+          srcX: p.x,
+          srcY: p.y,
+          amount: dmg,
+          fx: "stab",
+        });
 
             if (m.hp <= 0) {
               awardXp(p, 12);
@@ -1454,7 +1598,7 @@ const TICK_HZ = 30;
       caster.skill1CdUntilMs = startMs + SKILL1_COOLDOWN_MS;
 
       const ws = idToSocket.get(caster.id);
-      if (ws) send(ws, { type: "skill1Accepted", center: { x, y }, startMs, endMs, cdUntilMs: caster.skill1CdUntilMs, serverNowMs: Date.now() });
+      if (ws) send(ws, { type: "skill1Accepted", center: { x, y }, startMs, endMs, cdUntilMs: caster.skill1CdUntilMs });
 
       return true;
     }
@@ -1630,18 +1774,15 @@ if (whirlpools.size > 0) {
           pr.skill1 = false;
         }
 
-        const ws = idToSocket.get(pr.ownerId);
-        if (ws) {
-          send(ws, {
-            type: "hit",
-            targetId: m.id,
-            targetKind: "mob",
-            srcX: pr.x,
-            srcY: pr.y,
-            amount: hitDmg,
-            fx: "bolt",
-          });
-        }
+        broadcastToMap(pr.mapId, {
+          type: "hit",
+          targetId: m.id,
+          targetKind: "mob",
+          srcX: pr.x,
+          srcY: pr.y,
+          amount: hitDmg,
+          fx: "bolt",
+        });
 
         projectiles.delete(pid);
 
@@ -1743,18 +1884,15 @@ if (whirlpools.size > 0) {
           if (!collidesPlayer(target.mapId, target.x, ny)) target.y = ny;
           clampToWorldPlayer(target.mapId, target);
 
-          const ws = idToSocket.get(target.id);
-          if (ws) {
-            send(ws, {
-              type: "hit",
-              targetId: target.id,
-              targetKind: "player",
-              srcX: m.x,
-              srcY: m.y,
-              amount: dmg,
-              fx: "bite",
-            });
-          }
+          broadcastToMap(target.mapId, {
+            type: "hit",
+            targetId: target.id,
+            targetKind: "player",
+            srcX: m.x,
+            srcY: m.y,
+            amount: dmg,
+            fx: "bite",
+          });
         }
       }
     } else {
@@ -1853,6 +1991,14 @@ clampToWorld(m.mapId, m, radCombat);
    SNAPSHOTS
 ====================== */
 const SNAPSHOT_HZ = 15;
+
+// ===== Skill 2: Double Stab (spear-only) =====
+const SKILL2_COOLDOWN_MS = 6_000;
+const SKILL2_GAP_MS = 120;          // time between the two stabs
+const SKILL2_ATK_ANIM = 0.14;       // shorter than normal attack anim
+const SKILL2_SPEAR_OFFSET = 58;     // base spear OFFSET(50) + bonus reach
+const SKILL2_SPEAR_RADIUS = 38;     // base spear RADIUS(32) + bonus hitbox
+const SKILL2_JUT_ANGLE = Math.PI / 28; // ~6.4 degrees
 setInterval(() => {
   for (const ws of wss.clients) {
     if (ws.readyState !== 1) continue;
@@ -1932,7 +2078,6 @@ setInterval(() => {
       mapH: m.h,
       tileSize: TILE,
       portalTile: PORTAL_TILE,
-      serverNowMs: Date.now(),
 
 // active skill instances (map-scoped)
 whirlpools: Array.from(whirlpools.values())
@@ -1941,6 +2086,7 @@ whirlpools: Array.from(whirlpools.values())
 // self skill timers (client UI convenience)
 selfSkill1ActiveUntilMs: (players.get(socketToId.get(ws))?.skill1ActiveUntilMs) || 0,
 selfSkill1CdUntilMs: (players.get(socketToId.get(ws))?.skill1CdUntilMs) || 0,
+selfSkill2CdUntilMs: (players.get(socketToId.get(ws))?.skill2CdUntilMs) || 0,
       players: ps,
       npcs: ns,
       mobs: ms,
@@ -1953,20 +2099,8 @@ selfSkill1CdUntilMs: (players.get(socketToId.get(ws))?.skill1CdUntilMs) || 0,
 const PORT = process.env.PORT || 3000;
 
 server.listen(PORT, () => {
-  console.log(`🚀 Server running at http://localhost:${PORT} (TILE=${TILE}, PORTAL_TILE=${PORTAL_TILE})`);
+  console.log(`🚀 Server running on port ${PORT} (TILE=${TILE}, PORTAL_TILE=${PORTAL_TILE})`);
   console.log(`Maps: A=${maps.A.w}x${maps.A.h}, B=${maps.B.w}x${maps.B.h}, C=${maps.C.w}x${maps.C.h}`);
 });
 
 
-// teleport via portal: spawn ON the destination portal tile
-function getSpawnOnPortal(destMap, fromMapName) {
-  const destPortals = MAPS[destMap].portals || [];
-  // find portal that leads back to the map we came from
-  const p = destPortals.find(pt => pt.to === fromMapName);
-  if (p) return { x: p.x, y: p.y };
-  // fallback: center of map
-  return {
-    x: Math.floor(MAPS[destMap].w / 2),
-    y: Math.floor(MAPS[destMap].h / 2)
-  };
-}
