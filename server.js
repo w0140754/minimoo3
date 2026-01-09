@@ -2166,6 +2166,7 @@ setInterval(() => {
 
     send(ws, {
       type: "snapshot",
+      nowMs: Date.now(),
       mapId,
       map: m.map,
       objMap: m.obj,
