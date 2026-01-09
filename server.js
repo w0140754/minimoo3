@@ -1743,326 +1743,345 @@ function moveMobWithSlide(m, stepX, stepY, radius, target = null) {
   return attempt(p1x, p1y) || attempt(p2x, p2y);
 }
 
-setInterval(() => {
-  const dt = 1 / TICK_HZ;
+const FIXED_TICK_DT = 1 / TICK_HZ;
+let lastTickMs = Date.now();
+let tickAcc = 0;
 
-
-// Remove expired whirlpools
-if (whirlpools.size > 0) {
-  const nowMs = Date.now();
-  for (const [wid, w] of whirlpools) {
-    if (nowMs >= w.endMs) whirlpools.delete(wid);
-  }
-}
-
-
-  // Players movement + timers + save + drop pickup + respawn
-  const PLAYER_SPEED = 180;
-  for (const p of players.values()) {
-    p.atkAnim = Math.max(0, p.atkAnim - dt);
-    p.atkCd = Math.max(0, p.atkCd - dt);
-    p.invuln = Math.max(0, p.invuln - dt);
-
-    // Respawn countdown
-    if (p.respawnIn > 0) {
-      p.respawnIn -= dt;
-      if (p.respawnIn <= 0) {
-        // If the player is being moved to a (potentially different) map on respawn,
-        // end any active Skill 1 effects they own immediately.
-        cancelSkill1ForCaster(p.id);
-        p.skill1ActiveUntilMs = 0;
-        p.skill1Primed = false;
-
-        if (p.save) {
-          p.mapId = p.save.mapId;
-          p.x = p.save.x;
-          p.y = p.save.y;
-        } else {
-          const s = findSpawn("C", PLAYER_FOOT_RADIUS);
-          p.mapId = "C";
-          p.x = s.x;
-          p.y = s.y;
-        }
-        p.hp = p.maxHp;
-        p.invuln = 0.6;
-        p.atkCd = 0;
-        p.atkAnim = 0;
-      }
-      continue;
-    }
-
-    if (p.hp <= 0) continue;
-
-    let dx = 0, dy = 0;
-    if (p.inputs.left) dx -= 1;
-    if (p.inputs.right) dx += 1;
-    if (p.inputs.up) dy -= 1;
-    if (p.inputs.down) dy += 1;
-
-    const len = Math.hypot(dx, dy);
-    if (len > 0) { dx /= len; dy /= len; }
-
-    const nx = p.x + dx * PLAYER_SPEED * dt;
-    const ny = p.y + dy * PLAYER_SPEED * dt;
-
-    if (!collidesPlayer(p.mapId, nx, p.y)) p.x = nx;
-    if (!collidesPlayer(p.mapId, p.x, ny)) p.y = ny;
-
-    clampToWorldPlayer(p.mapId, p);
-
-    maybePickupDropsForPlayer(p);
-  }
-
-  // Projectiles
-  const nowMs = Date.now();
-  for (const [pid, pr] of projectiles) {
-    if (pr.expiresAtMs <= nowMs) { projectiles.delete(pid); continue; }
-
-    // move
-    pr.x += pr.vx * dt;
-    pr.y += pr.vy * dt;
-
-    // hit wall -> delete
-    if (collides(pr.mapId, pr.x, pr.y, pr.rad)) {
-      projectiles.delete(pid);
-      continue;
-    }
-
-    // hit mob
-    for (const m of mobs.values()) {
-      if (m.mapId !== pr.mapId) continue;
-      if (m.respawnIn > 0) continue;
-      if (m.hp <= 0) continue;
-
-      if (dist(pr.x, pr.y, m.x, m.y) <= (pr.rad + (m.radius ?? MOB_RADIUS))) {
-        // Skill-shot projectiles should not also deal normal wand damage.
-        const hitDmg = pr.skill1 ? 0 : pr.damage;
-        if (hitDmg > 0) m.hp -= hitDmg;
-        m.lastHitBy = pr.ownerId;
-
-        setMobAggro(m, pr.ownerId);
-
-        // If this projectile was a primed Skill 1 shot, start the whirlpool ONLY on a successful mob hit.
-        if (pr.skill1) {
-          const caster = players.get(pr.ownerId);
-          // Start centered on the mob that was hit.
-          tryStartSkill1Whirlpool(caster, m.mapId, m.x, m.y);
-          // Prevent double-trigger attempts from the same projectile.
-          pr.skill1 = false;
-        }
-
-        broadcastToMap(pr.mapId, {
-          type: "hit",
-          targetId: m.id,
-          targetKind: "mob",
-          srcX: pr.x,
-          srcY: pr.y,
-          amount: hitDmg,
-          fx: "bolt",
-        });
-
-        projectiles.delete(pid);
-
-        if (m.hp <= 0) {
-          // award xp to owner if still around
-          const owner = players.get(pr.ownerId);
-          if (owner) awardXp(owner, 12);
-
-          const coins = 2 + Math.floor(Math.random() * 4);
-          spawnCoins(m.mapId, m.x, m.y, coins);
-          maybeDropOrangeFlan(m);
-          m.deadAtMs = Date.now();
-          m.corpseUntilMs = m.deadAtMs + 2000;
-          m.respawnIn = 5;
-        }
-        break;
-      }
+function tickStep(dt) {
+  // Remove expired whirlpools
+  if (whirlpools.size > 0) {
+    const nowMs = Date.now();
+    for (const [wid, w] of whirlpools) {
+      if (nowMs >= w.endMs) whirlpools.delete(wid);
     }
   }
 
-  // Mobs: wander + melee attack + respawn
-  const BASE_MOB_SPEED = 120;
-  // use per-mob baseAggroRange / hitAggroRange instead of a single constant
-  const MOB_HIT = 36;
-  // MOB damage is per-type (see MOB_STATS). Fallback below if missing.
-  const MOB_ATK_CD = 0.9;
 
-  for (const m of mobs.values()) {
-    if (m.respawnIn > 0) {
-      m.respawnIn -= dt;
-      if (m.respawnIn <= 0) respawnMob(m);
-      continue;
-    }
-    if (m.hp <= 0) continue;
-
-    m.atkCd = Math.max(0, m.atkCd - dt);
-
-    // passive logic: only aggro after being hit (or while aggroUntil)
-    let target = null;
-    let bestD = Infinity;
-
-    const aggroActive = (!m.passiveUntilHit) || (m.aggroUntil > Date.now());
-
-    if (m.aggroUntil <= Date.now()) {
-      m.aggroTargetId = null;
-    }
-
+    // Players movement + timers + save + drop pickup + respawn
+    const PLAYER_SPEED = 180;
     for (const p of players.values()) {
-      if (p.mapId !== m.mapId) continue;
-      if (p.hp <= 0) continue;
-      if (p.respawnIn > 0) continue;
+      p.atkAnim = Math.max(0, p.atkAnim - dt);
+      p.atkCd = Math.max(0, p.atkCd - dt);
+      p.invuln = Math.max(0, p.invuln - dt);
 
-      // If this mob was recently hit, it "locks on" to the attacker for a few seconds.
-      if (m.aggroUntil > Date.now() && m.aggroTargetId && p.id !== m.aggroTargetId) continue;
+      // Respawn countdown
+      if (p.respawnIn > 0) {
+        p.respawnIn -= dt;
+        if (p.respawnIn <= 0) {
+          // If the player is being moved to a (potentially different) map on respawn,
+          // end any active Skill 1 effects they own immediately.
+          cancelSkill1ForCaster(p.id);
+          p.skill1ActiveUntilMs = 0;
+          p.skill1Primed = false;
 
-      if (m.passiveUntilHit) {
-        if (!aggroActive) continue;
-        if (m.aggroTargetId && p.id !== m.aggroTargetId) continue;
+          if (p.save) {
+            p.mapId = p.save.mapId;
+            p.x = p.save.x;
+            p.y = p.save.y;
+          } else {
+            const s = findSpawn("C", PLAYER_FOOT_RADIUS);
+            p.mapId = "C";
+            p.x = s.x;
+            p.y = s.y;
+          }
+          p.hp = p.maxHp;
+          p.invuln = 0.6;
+          p.atkCd = 0;
+          p.atkAnim = 0;
+        }
+        continue;
       }
 
-      const d = dist(p.x, p.y, m.x, m.y);
-      if (d < bestD) { bestD = d; target = p; }
+      if (p.hp <= 0) continue;
+
+      let dx = 0, dy = 0;
+      if (p.inputs.left) dx -= 1;
+      if (p.inputs.right) dx += 1;
+      if (p.inputs.up) dy -= 1;
+      if (p.inputs.down) dy += 1;
+
+      const len = Math.hypot(dx, dy);
+      if (len > 0) { dx /= len; dy /= len; }
+
+      const nx = p.x + dx * PLAYER_SPEED * dt;
+      const ny = p.y + dy * PLAYER_SPEED * dt;
+
+      if (!collidesPlayer(p.mapId, nx, p.y)) p.x = nx;
+      if (!collidesPlayer(p.mapId, p.x, ny)) p.y = ny;
+
+      clampToWorldPlayer(p.mapId, p);
+
+      maybePickupDropsForPlayer(p);
     }
 
-    let dirX = 0, dirY = 0;
+    // Projectiles
+    const nowMs = Date.now();
+    for (const [pid, pr] of projectiles) {
+      if (pr.expiresAtMs <= nowMs) { projectiles.delete(pid); continue; }
 
-    const nowAggroMs = Date.now();
-    const provoked = (m.aggroUntil > nowAggroMs) && !!m.aggroTargetId;
-    const aggroRange = provoked ? (m.hitAggroRange ?? MOB_HIT_AGGRO) : (m.baseAggroRange ?? MOB_BASE_AGGRO);
+      // move
+      pr.x += pr.vx * dt;
+      pr.y += pr.vy * dt;
 
-    if (target && bestD <= aggroRange) {
-      const dx = target.x - m.x;
-      const dy = target.y - m.y;
-      const l = Math.hypot(dx, dy) || 1;
-      dirX = dx / l;
-      dirY = dy / l;
+      // hit wall -> delete
+      if (collides(pr.mapId, pr.x, pr.y, pr.rad)) {
+        projectiles.delete(pid);
+        continue;
+      }
 
-      if (bestD <= MOB_HIT && m.atkCd <= 0) {
-        m.atkCd = MOB_ATK_CD;
+      // hit mob
+      for (const m of mobs.values()) {
+        if (m.mapId !== pr.mapId) continue;
+        if (m.respawnIn > 0) continue;
+        if (m.hp <= 0) continue;
 
-        if (target.invuln <= 0) {
-          const dmg = Number.isFinite(m.damage) ? m.damage : 10;
-          target.hp = Math.max(0, target.hp - dmg);
-          target.invuln = 0.35;
+        if (dist(pr.x, pr.y, m.x, m.y) <= (pr.rad + (m.radius ?? MOB_RADIUS))) {
+          // Skill-shot projectiles should not also deal normal wand damage.
+          const hitDmg = pr.skill1 ? 0 : pr.damage;
+          if (hitDmg > 0) m.hp -= hitDmg;
+          m.lastHitBy = pr.ownerId;
 
-          if (target.hp <= 0 && target.respawnIn <= 0) {
-            target.respawnIn = 2.0;
-            const ws = idToSocket.get(target.id);
-            if (ws) send(ws, { type: "dead" });
+          setMobAggro(m, pr.ownerId);
+
+          // If this projectile was a primed Skill 1 shot, start the whirlpool ONLY on a successful mob hit.
+          if (pr.skill1) {
+            const caster = players.get(pr.ownerId);
+            // Start centered on the mob that was hit.
+            tryStartSkill1Whirlpool(caster, m.mapId, m.x, m.y);
+            // Prevent double-trigger attempts from the same projectile.
+            pr.skill1 = false;
           }
 
-          const kx = (dx / l) * 16;
-          const ky = (dy / l) * 16;
-
-          const nx = target.x + kx;
-          const ny = target.y + ky;
-
-          if (!collidesPlayer(target.mapId, nx, target.y)) target.x = nx;
-          if (!collidesPlayer(target.mapId, target.x, ny)) target.y = ny;
-          clampToWorldPlayer(target.mapId, target);
-
-          broadcastToMap(target.mapId, {
+          broadcastToMap(pr.mapId, {
             type: "hit",
-            targetId: target.id,
-            targetKind: "player",
-            srcX: m.x,
-            srcY: m.y,
-            amount: dmg,
-            fx: "bite",
+            targetId: m.id,
+            targetKind: "mob",
+            srcX: pr.x,
+            srcY: pr.y,
+            amount: hitDmg,
+            fx: "bolt",
           });
+
+          projectiles.delete(pid);
+
+          if (m.hp <= 0) {
+            // award xp to owner if still around
+            const owner = players.get(pr.ownerId);
+            if (owner) awardXp(owner, 12);
+
+            const coins = 2 + Math.floor(Math.random() * 4);
+            spawnCoins(m.mapId, m.x, m.y, coins);
+            maybeDropOrangeFlan(m);
+            m.deadAtMs = Date.now();
+            m.corpseUntilMs = m.deadAtMs + 2000;
+            m.respawnIn = 5;
+          }
+          break;
         }
       }
-    } else {
-      m.changeDirIn -= dt;
-      if (m.changeDirIn <= 0) {
-        const [dx, dy] = randomDir();
-        m.dirX = dx; m.dirY = dy;
-        m.changeDirIn = 0.7 + Math.random() * 1.2;
-      }
-      dirX = m.dirX;
-      dirY = m.dirY;
     }
 
-    
-const speed = BASE_MOB_SPEED * (m.speedMul ?? 0.65) * (provoked ? (m.aggroSpeedMul ?? 1.0) : 1.0);
+    // Mobs: wander + melee attack + respawn
+    const BASE_MOB_SPEED = 120;
+    // use per-mob baseAggroRange / hitAggroRange instead of a single constant
+    const MOB_HIT = 36;
+    // MOB damage is per-type (see MOB_STATS). Fallback below if missing.
+    const MOB_ATK_CD = 0.9;
 
-// While chasing, if we get stuck on corners, add a short "wall-hug" nudge.
-// This is cheap, feels good, and avoids full pathfinding.
-if (target && bestD <= aggroRange) {
-  if (m.stuckForMs > 350 && m.nudgeUntilMs <= nowAggroMs) {
-    m.nudgeUntilMs = nowAggroMs + 260;
-    m.nudgeSign = (Math.random() < 0.5 ? -1 : 1);
+    for (const m of mobs.values()) {
+      if (m.respawnIn > 0) {
+        m.respawnIn -= dt;
+        if (m.respawnIn <= 0) respawnMob(m);
+        continue;
+      }
+      if (m.hp <= 0) continue;
+
+      m.atkCd = Math.max(0, m.atkCd - dt);
+
+      // passive logic: only aggro after being hit (or while aggroUntil)
+      let target = null;
+      let bestD = Infinity;
+
+      const aggroActive = (!m.passiveUntilHit) || (m.aggroUntil > Date.now());
+
+      if (m.aggroUntil <= Date.now()) {
+        m.aggroTargetId = null;
+      }
+
+      for (const p of players.values()) {
+        if (p.mapId !== m.mapId) continue;
+        if (p.hp <= 0) continue;
+        if (p.respawnIn > 0) continue;
+
+        // If this mob was recently hit, it "locks on" to the attacker for a few seconds.
+        if (m.aggroUntil > Date.now() && m.aggroTargetId && p.id !== m.aggroTargetId) continue;
+
+        if (m.passiveUntilHit) {
+          if (!aggroActive) continue;
+          if (m.aggroTargetId && p.id !== m.aggroTargetId) continue;
+        }
+
+        const d = dist(p.x, p.y, m.x, m.y);
+        if (d < bestD) { bestD = d; target = p; }
+      }
+
+      let dirX = 0, dirY = 0;
+
+      const nowAggroMs = Date.now();
+      const provoked = (m.aggroUntil > nowAggroMs) && !!m.aggroTargetId;
+      const aggroRange = provoked ? (m.hitAggroRange ?? MOB_HIT_AGGRO) : (m.baseAggroRange ?? MOB_BASE_AGGRO);
+
+      if (target && bestD <= aggroRange) {
+        const dx = target.x - m.x;
+        const dy = target.y - m.y;
+        const l = Math.hypot(dx, dy) || 1;
+        dirX = dx / l;
+        dirY = dy / l;
+
+        if (bestD <= MOB_HIT && m.atkCd <= 0) {
+          m.atkCd = MOB_ATK_CD;
+
+          if (target.invuln <= 0) {
+            const dmg = Number.isFinite(m.damage) ? m.damage : 10;
+            target.hp = Math.max(0, target.hp - dmg);
+            target.invuln = 0.35;
+
+            if (target.hp <= 0 && target.respawnIn <= 0) {
+              target.respawnIn = 2.0;
+              const ws = idToSocket.get(target.id);
+              if (ws) send(ws, { type: "dead" });
+            }
+
+            const kx = (dx / l) * 16;
+            const ky = (dy / l) * 16;
+
+            const nx = target.x + kx;
+            const ny = target.y + ky;
+
+            if (!collidesPlayer(target.mapId, nx, target.y)) target.x = nx;
+            if (!collidesPlayer(target.mapId, target.x, ny)) target.y = ny;
+            clampToWorldPlayer(target.mapId, target);
+
+            broadcastToMap(target.mapId, {
+              type: "hit",
+              targetId: target.id,
+              targetKind: "player",
+              srcX: m.x,
+              srcY: m.y,
+              amount: dmg,
+              fx: "bite",
+            });
+          }
+        }
+      } else {
+        m.changeDirIn -= dt;
+        if (m.changeDirIn <= 0) {
+          const [dx, dy] = randomDir();
+          m.dirX = dx; m.dirY = dy;
+          m.changeDirIn = 0.7 + Math.random() * 1.2;
+        }
+        dirX = m.dirX;
+        dirY = m.dirY;
+      }
+
+
+  const speed = BASE_MOB_SPEED * (m.speedMul ?? 0.65) * (provoked ? (m.aggroSpeedMul ?? 1.0) : 1.0);
+
+  // While chasing, if we get stuck on corners, add a short "wall-hug" nudge.
+  // This is cheap, feels good, and avoids full pathfinding.
+  if (target && bestD <= aggroRange) {
+    if (m.stuckForMs > 350 && m.nudgeUntilMs <= nowAggroMs) {
+      m.nudgeUntilMs = nowAggroMs + 260;
+      m.nudgeSign = (Math.random() < 0.5 ? -1 : 1);
+      m.stuckForMs = 0;
+    }
+    if (m.nudgeUntilMs > nowAggroMs) {
+      // Blend desired dir with a perpendicular component (left/right) to help slip around corners.
+      const sx = -dirY * m.nudgeSign;
+      const sy = dirX * m.nudgeSign;
+      const bx = dirX + sx * 0.9;
+      const by = dirY + sy * 0.9;
+      const bl = Math.hypot(bx, by) || 1;
+      dirX = bx / bl;
+      dirY = by / bl;
+    }
+  }
+
+  const stepX = dirX * speed * dt;
+  const stepY = dirY * speed * dt;
+
+  const radCombat = (m.radius ?? MOB_RADIUS);
+  const radMove = radCombat * MOB_MOVE_RADIUS_MUL;
+
+  const moved = moveMobWithSlide(m, stepX, stepY, radMove, (target && bestD <= aggroRange) ? target : null);
+
+
+  // Skill 1: whirlpool pull (mobs still run their normal AI movement, we just add an extra "drag" step)
+  // Multiple whirlpools stack by summing their pull vectors.
+  if (whirlpools.size > 0) {
+    let fx = 0, fy = 0;
+    const nowMs = Date.now();
+    for (const w of whirlpools.values()) {
+      if (w.mapId !== m.mapId) continue;
+      if (nowMs >= w.endMs) continue;
+      const dxw = w.x - m.x;
+      const dyw = w.y - m.y;
+      const dw = Math.hypot(dxw, dyw);
+      if (dw <= 1e-6 || dw > w.rad) continue;
+
+      // Pull strength ramps up as you get closer to the edge -> gentle near center.
+      const t = 1 - (dw / w.rad); // 0 at edge, 1 at center
+      const strength = 65 + 55 * t; // px/sec
+      fx += (dxw / dw) * strength;
+      fy += (dyw / dw) * strength;
+    }
+
+    if (fx !== 0 || fy !== 0) {
+      const stepPullX = fx * dt;
+      const stepPullY = fy * dt;
+      moveMobWithSlide(m, stepPullX, stepPullY, radMove, null);
+    }
+  }
+
+
+  // If chasing and we didn't move, accumulate "stuck time" so we can apply a brief nudge.
+  if (target && bestD <= aggroRange) {
+    if (!moved) m.stuckForMs = (m.stuckForMs ?? 0) + dt * 1000;
+    else m.stuckForMs = 0;
+  } else {
     m.stuckForMs = 0;
+    m.nudgeUntilMs = 0;
   }
-  if (m.nudgeUntilMs > nowAggroMs) {
-    // Blend desired dir with a perpendicular component (left/right) to help slip around corners.
-    const sx = -dirY * m.nudgeSign;
-    const sy = dirX * m.nudgeSign;
-    const bx = dirX + sx * 0.9;
-    const by = dirY + sy * 0.9;
-    const bl = Math.hypot(bx, by) || 1;
-    dirX = bx / bl;
-    dirY = by / bl;
-  }
+
+  if (!moved) m.changeDirIn = 0;
+
+  clampToWorld(m.mapId, m, radCombat);
+    }
+
+    // drop expiry cleanup
+    for (const [did, d] of drops) {
+      if (d.expiresAtMs <= nowMs) drops.delete(did);
+    }
 }
 
-const stepX = dirX * speed * dt;
-const stepY = dirY * speed * dt;
-
-const radCombat = (m.radius ?? MOB_RADIUS);
-const radMove = radCombat * MOB_MOVE_RADIUS_MUL;
-
-const moved = moveMobWithSlide(m, stepX, stepY, radMove, (target && bestD <= aggroRange) ? target : null);
-
-
-// Skill 1: whirlpool pull (mobs still run their normal AI movement, we just add an extra "drag" step)
-// Multiple whirlpools stack by summing their pull vectors.
-if (whirlpools.size > 0) {
-  let fx = 0, fy = 0;
+setInterval(() => {
   const nowMs = Date.now();
-  for (const w of whirlpools.values()) {
-    if (w.mapId !== m.mapId) continue;
-    if (nowMs >= w.endMs) continue;
-    const dxw = w.x - m.x;
-    const dyw = w.y - m.y;
-    const dw = Math.hypot(dxw, dyw);
-    if (dw <= 1e-6 || dw > w.rad) continue;
+  let frameDt = (nowMs - lastTickMs) / 1000;
+  lastTickMs = nowMs;
+  if (!Number.isFinite(frameDt) || frameDt < 0) frameDt = FIXED_TICK_DT;
+  frameDt = Math.min(0.25, frameDt);
+  tickAcc += frameDt;
 
-    // Pull strength ramps up as you get closer to the edge -> gentle near center.
-    const t = 1 - (dw / w.rad); // 0 at edge, 1 at center
-    const strength = 65 + 55 * t; // px/sec
-    fx += (dxw / dw) * strength;
-    fy += (dyw / dw) * strength;
+  const maxSteps = 6;
+  let steps = 0;
+  while (tickAcc >= FIXED_TICK_DT && steps < maxSteps) {
+    tickStep(FIXED_TICK_DT);
+    tickAcc -= FIXED_TICK_DT;
+    steps++;
   }
-
-  if (fx !== 0 || fy !== 0) {
-    const stepPullX = fx * dt;
-    const stepPullY = fy * dt;
-    moveMobWithSlide(m, stepPullX, stepPullY, radMove, null);
-  }
-}
-
-
-// If chasing and we didn't move, accumulate "stuck time" so we can apply a brief nudge.
-if (target && bestD <= aggroRange) {
-  if (!moved) m.stuckForMs = (m.stuckForMs ?? 0) + dt * 1000;
-  else m.stuckForMs = 0;
-} else {
-  m.stuckForMs = 0;
-  m.nudgeUntilMs = 0;
-}
-
-if (!moved) m.changeDirIn = 0;
-
-clampToWorld(m.mapId, m, radCombat);
-  }
-
-  // drop expiry cleanup
-  for (const [did, d] of drops) {
-    if (d.expiresAtMs <= nowMs) drops.delete(did);
-  }
-
+  if (steps === maxSteps) tickAcc = 0;
 }, 1000 / TICK_HZ);
+
 
 /* ======================
    SNAPSHOTS
