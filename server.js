@@ -112,10 +112,13 @@ function makeMapA() {
 [0,0,0,0,0,0,0,7,0,0,0,0,0,0,0,0,0,7,0,0,0,0,0,0,0]];
 
   // Keep portal links unchanged (portals are defined separately from the ground/object arrays)
-  const pToC = { x: 11, y: 0,  to: "C" };  // A -> C (top portal)
+  const pToC = { x: 11, y: 0,  to: "C" };  // A -> C (top portal / safe)
   const pToB = { x: 11, y: 16, to: "B" };  // A -> B (bottom portal)
+  const pToD = { x: 0,  y: Math.floor(h / 2), to: "D" }; // A -> D (left portal: snails)
+  // Ensure portal tile stays walkable ground
+  map[pToD.y][pToD.x] = 0;
 
-  return { id: "A", w, h, map, obj, portals: [pToC, pToB] };
+  return { id: "A", w, h, map, obj, portals: [pToC, pToB, pToD] };
 }
 
 function makeMapB() {
@@ -161,8 +164,51 @@ function makeMapC() {
   return { id: "C", w, h, map, obj, portals: [pToA] };
 }
 
+
+function makeMapD() {
+  // Snail map: mostly open grass with a tree perimeter
+  const w = 26, h = 18;
+  const map = makeEmptyLayer(w, h, 0); // all grass
+  const obj = makeEmptyLayer(w, h, 0);
+
+  // Perimeter trees (same object ids as other maps: canopy=1, trunk=6)
+  // Top + bottom rows
+  for (let x = 1; x < w - 1; x += 3) {
+    // top
+    obj[0][x] = 1;
+    obj[1][x] = 6;
+    // bottom
+    obj[h - 3][x] = 1;
+    obj[h - 2][x] = 6;
+  }
+  // Left + right columns
+  for (let y = 3; y < h - 2; y += 3) {
+    obj[y - 1][1] = 1;
+    obj[y][1] = 6;
+
+    obj[y - 1][w - 2] = 1;
+    obj[y][w - 2] = 6;
+  }
+
+  // A couple interior trees for flavor
+  const midTrees = [
+    { x: 8, y: 6 },
+    { x: 18, y: 11 },
+  ];
+  for (const t of midTrees) {
+    if (t.y > 0) obj[t.y - 1][t.x] = 1;
+    obj[t.y][t.x] = 6;
+  }
+
+  // Portal back to A (right edge, mid)
+  const pToA = { x: w - 1, y: Math.floor(h / 2), to: "A" };
+  map[pToA.y][pToA.x] = 0;
+
+  return { id: "D", w, h, map, obj, portals: [pToA] };
+}
+
 // Build map templates, then clone into a live, mutable runtime copy.
-const mapTemplates = { A: makeMapA(), B: makeMapB(), C: makeMapC() };
+const mapTemplates = { A: makeMapA(), B: makeMapB(), C: makeMapC(), D: makeMapD() };
 
 function clone2D(grid) {
   return grid.map(row => row.slice());
@@ -186,6 +232,7 @@ let maps = {
   A: cloneMap(mapTemplates.A),
   B: cloneMap(mapTemplates.B),
   C: cloneMap(mapTemplates.C),
+  D: cloneMap(mapTemplates.D),
 };
 
 function tileAt(mapId, x, y) {
@@ -244,6 +291,9 @@ const MOB_RADIUS_BY_TYPE = {
   orange: 28,
   purple: 28,
   rainbow: 30,
+
+  snail_blue: 30,
+  snail_red:  30,
 };
 
 // Aggro tuning
@@ -493,13 +543,11 @@ const ITEMS = {
   },
 
   // equipment (MapleStory-style)
-  training_sword: { id: "training_sword", name: "Training Sword", type: "weapon", slot: "weapon", weaponKey: "sword", maxStack: 1 },
-  training_spear: { id: "training_spear", name: "Training Spear", type: "weapon", slot: "weapon", weaponKey: "spear", maxStack: 1 },
-
-  candy_cane_spear: { id: "candy_cane_spear", name: "Candy Cane Spear", type: "weapon", slot: "weapon", weaponKey: "spear", maxStack: 1 },
-  fang_spear:       { id: "fang_spear",       name: "Fang Spear",       type: "weapon", slot: "weapon", weaponKey: "spear", maxStack: 1 },
-  training_wand:  { id: "training_wand",  name: "Training Wand",  type: "weapon", slot: "weapon", weaponKey: "wand",  maxStack: 1 },
-
+  training_sword: { id: "training_sword", name: "Training Sword", type: "weapon", slot: "weapon", weaponKey: "sword", maxStack: 1 , weaponSpeed: 1.75 },
+  training_spear: { id: "training_spear", name: "Training Spear", type: "weapon", slot: "weapon", weaponKey: "spear", maxStack: 1 , weaponSpeed: 1.5 },
+  candy_cane_spear: { id: "candy_cane_spear", name: "Candy Cane Spear", type: "weapon", slot: "weapon", weaponKey: "spear", maxStack: 1 , weaponSpeed: 1.75 },
+  fang_spear:       { id: "fang_spear",       name: "Fang Spear",       type: "weapon", slot: "weapon", weaponKey: "spear", maxStack: 1 , weaponSpeed: 1.5 },
+  training_wand:  { id: "training_wand",  name: "Training Wand",  type: "weapon", slot: "weapon", weaponKey: "wand",  maxStack: 1 , weaponSpeed: 1 },
   cloth_armor:   { id: "cloth_armor",   name: "Cloth Armor",   type: "armor",     slot: "armor",     maxStack: 1 },
   charger_suit: { id: "charger_suit", name: "Charger Suit", type: "armor", slot: "armor", maxStack: 1 },
   cloth_hat:     { id: "cloth_hat",     name: "Cloth Hat",     type: "hat",       slot: "hat",       maxStack: 1 },
@@ -688,7 +736,7 @@ const MOB_STATS = {
 const mobs = new Map();
 
 function spawnMob(id, mapId, opts = {}) {
-  const mobType = opts.mobType || "purple"; // green | pink | orange | purple | rainbow
+  const mobType = opts.mobType || "purple"; // green | pink | orange | purple | rainbow | snail_blue | snail_red
   const radius = opts.radius ?? MOB_RADIUS_BY_TYPE[mobType] ?? MOB_RADIUS;
 
   // Allow explicit placement (tile coords or world coords) for curated spawns.
@@ -802,6 +850,33 @@ const RAINBOW_SPAWNS_B = [
 RAINBOW_SPAWNS_B.forEach((s, i) => {
   spawnMob(`b_rainbow_${i + 1}`, "B", { mobType: "rainbow", tx: s.tx, ty: s.ty });
 });
+const SNAIL_BLUE_SPAWNS_D = [
+  { tx: 6,  ty: 6 },
+  { tx: 12, ty: 8 },
+  { tx: 18, ty: 6 },
+];
+SNAIL_BLUE_SPAWNS_D.forEach((s, i) => {
+  spawnMob(`d_snail_blue_${i + 1}`, "D", {
+    mobType: "snail_blue",
+    tx: s.tx, ty: s.ty,
+    speedMul: 0.38,
+    aggroSpeedMul: 0.55,
+  });
+});
+
+const SNAIL_RED_SPAWNS_D = [
+  { tx: 8,  ty: 12 },
+  { tx: 16, ty: 12 },
+];
+SNAIL_RED_SPAWNS_D.forEach((s, i) => {
+  spawnMob(`d_snail_red_${i + 1}`, "D", {
+    mobType: "snail_red",
+    tx: s.tx, ty: s.ty,
+    speedMul: 0.34,
+    aggroSpeedMul: 0.5,
+  });
+});
+
 
 function respawnMob(m) {
   const s = findSpawn(m.mapId, m.radius ?? MOB_RADIUS);
@@ -1343,8 +1418,10 @@ if (msg.type === "skill2DoubleStab") {
 
       // weapon cooldowns (anti-spam)
       // NOTE: This is the *authoritative* lockout. The client should only animate when it sees atkAnim > 0 in snapshots.
-      const weaponDelaySec = ({ sword: 0.30, spear: 0.30, wand: 0.30 })[weaponKey] ?? 0.30;
-      p.atkCd = weaponDelaySec;
+      const baseDelaySec = 1.0; // all weapons are balanced around 1 basic attack per second
+      const weaponSpeed = Number(equippedDef?.weaponSpeed) || 1;
+      const finalDelaySec = baseDelaySec / Math.max(0.05, weaponSpeed);
+      p.atkCd = finalDelaySec;
       // Optional aim from client.
 // We prefer aimDirX/aimDirY when provided because they are derived from the player's
 // on-screen position and are not affected by camera smoothing lag.
@@ -2100,7 +2177,6 @@ const PORT = process.env.PORT || 3000;
 
 server.listen(PORT, () => {
   console.log(`🚀 Server running on port ${PORT} (TILE=${TILE}, PORTAL_TILE=${PORTAL_TILE})`);
-  console.log(`Maps: A=${maps.A.w}x${maps.A.h}, B=${maps.B.w}x${maps.B.h}, C=${maps.C.w}x${maps.C.h}`);
+  console.log(`Maps: A=${maps.A.w}x${maps.A.h}, B=${maps.B.w}x${maps.B.h}, C=${maps.C.w}x${maps.C.h}, D=${maps.D.w}x${maps.D.h}`);
 });
-
 

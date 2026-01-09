@@ -230,6 +230,10 @@ let invDragOffY = 0;
 let invCloseRect = null;
 let invHeaderRect = null;
 
+// Mouse position in screen-space (for inventory hover tooltips)
+let uiMouse = { mx: 0, my: 0, has: false };
+let invHover = null; // { id, qty, source, rect }
+
 function clamp(v, a, b) { return Math.max(a, Math.min(b, v)); }
 function lerp(a, b, t) { return a + (b - a) * t; }
 function easeInOut(t) { return t * t * (3 - 2 * t); }
@@ -479,14 +483,16 @@ const mobSprites = {
   orange: new Image(),
   purple: new Image(),
   rainbow: new Image(),
+  snail_blue: new Image(),
+  snail_red: new Image(),
 };
 mobSprites.green.src   = "/assets/mobs/slime_green.png";
 mobSprites.pink.src    = "/assets/mobs/slime_pink.png";
 mobSprites.orange.src  = "/assets/mobs/slime_orange.png";
 mobSprites.purple.src  = "/assets/mobs/slime_purple.png";
 mobSprites.rainbow.src = "/assets/mobs/slime_rainbow.png";
-
-
+mobSprites.snail_blue.src = "/assets/mobs/snail_blue.png";
+mobSprites.snail_red.src  = "/assets/mobs/snail_red.png";
 /* ======================
    EQUIPMENT ICONS (32x32)
 ====================== */
@@ -1113,9 +1119,9 @@ function getMouseWorldFromEvent(e) {
 // Keep an updated mouse->world aim point even when you aren't clicking.
 // This lets keyboard-triggered skills aim in the same direction as click-attacks.
 canvas.addEventListener("mousemove", (e) => {
-  // If the mouse is over the inventory window, still track aim so you can
-  // close inventory and immediately skill/attack without a "stale" direction.
+  // Track cursor for both aiming and UI hover.
   const { mx, my, wx, wy } = getMouseWorldFromEvent(e);
+  uiMouse.mx = mx; uiMouse.my = my; uiMouse.has = true;
   lastAim.mx = mx;
   lastAim.my = my;
   lastAim.wx = wx;
@@ -1420,6 +1426,9 @@ canvas.addEventListener("mousemove", (e) => {
 });
 
 canvas.addEventListener("mouseleave", () => { editorMouseHas = false; });
+
+// Inventory tooltip hover reset
+canvas.addEventListener("mouseleave", () => { uiMouse.has = false; });
 
 canvas.addEventListener("mousedown", (e) => {
 
@@ -2970,6 +2979,200 @@ function drawInventory(inv, equipment) {
   ctx.restore();
 }
 
+/* ======================
+   INVENTORY TOOLTIP (hover)
+====================== */
+// Keep this in sync with server.js ITEMS for names. Desc is client-only flavor.
+const ITEM_INFO = {
+  coin:            { name: "Coin",            desc: "Currency picked up from mobs." },
+  orange_flan:     { name: "Orange Flan",     desc: "A wobbly snack. Looks suspiciously delicious." },
+  potion_small:    { name: "Small Potion",    desc: "Restores 25 HP." },
+
+  training_sword:  { name: "Training Sword",  desc: "A basic sword for practice." },
+  training_spear:  { name: "Training Spear",  desc: "A basic spear for practice." },
+  candy_cane_spear:{ name: "Candy Cane Spear",desc: "Festive… and pointy." },
+  fang_spear:      { name: "Fang Spear",      desc: "A spear tipped with a wicked fang." },
+  training_wand:   { name: "Training Wand",   desc: "A simple wand for new mages." },
+
+  cloth_armor:     { name: "Cloth Armor",     desc: "Light protection." },
+  charger_suit:    { name: "Charger Suit",    desc: "Sturdy armor with a metallic sheen." },
+  cloth_hat:       { name: "Cloth Hat",       desc: "Keeps the sun out of your eyes." },
+  charger_helmet:  { name: "Charger Helmet",  desc: "A helmet with a solid visor." },
+  lucky_charm:     { name: "Lucky Charm",     desc: "Maybe it really is lucky." },
+};
+
+// Minimal item meta for tooltip "splash" lines (type + weapon speed).
+// Keep these in sync with server.js ITEMS where applicable.
+const ITEM_META = {
+  training_sword:   { slot: "weapon", kind: "Sword", weaponSpeed: 1.75 },
+  training_wand:    { slot: "weapon", kind: "Wand",  weaponSpeed: 1.00 },
+  training_spear:   { slot: "weapon", kind: "Spear", weaponSpeed: 1.50 },
+  candy_cane_spear: { slot: "weapon", kind: "Spear", weaponSpeed: 1.75 },
+  fang_spear:       { slot: "weapon", kind: "Spear", weaponSpeed: 1.50 },
+
+  cloth_armor:      { slot: "armor", kind: "Armor" },
+  charger_suit:     { slot: "armor", kind: "Armor" },
+  cloth_hat:        { slot: "hat",   kind: "Hat"   },
+  charger_helmet:   { slot: "hat",   kind: "Hat"   },
+  lucky_charm:      { slot: "accessory", kind: "Accessory" },
+};
+
+function getItemTooltipData(itemId, qty = 1) {
+  const info = ITEM_INFO[itemId] || null;
+  const name = (info && info.name) ? info.name : String(itemId || "Unknown");
+  const desc = (info && info.desc) ? info.desc : "";
+  const metaLines = [];
+
+  const meta = ITEM_META[itemId] || null;
+  if (meta) {
+    if (meta.slot === "weapon") {
+      const kind = meta.kind ? ` (${meta.kind})` : "";
+      metaLines.push(`Type: Weapon${kind}`);
+      if (typeof meta.weaponSpeed === "number") {
+        const s = (Math.round(meta.weaponSpeed * 100) / 100).toString();
+        metaLines.push(`Speed: ${s}x`);
+      }
+    } else if (meta.slot === "armor") {
+      metaLines.push("Type: Armor");
+    } else if (meta.slot === "hat") {
+      metaLines.push("Type: Hat");
+    } else if (meta.slot === "accessory") {
+      metaLines.push("Type: Accessory");
+    }
+  }
+
+  if (qty > 1) metaLines.push(`x${qty}`);
+  return { name, desc, metaLines };
+}
+
+function wrapTooltipText(text, maxWidthPx, font = "12px system-ui") {
+  if (!text) return [];
+  ctx.save();
+  ctx.font = font;
+  const words = String(text).split(/\s+/).filter(Boolean);
+  const lines = [];
+  let line = "";
+  for (const w of words) {
+    const test = line ? (line + " " + w) : w;
+    if (ctx.measureText(test).width <= maxWidthPx) line = test;
+    else {
+      if (line) lines.push(line);
+      line = w;
+    }
+  }
+  if (line) lines.push(line);
+  ctx.restore();
+  return lines;
+}
+
+function getInventoryHover(mx, my, inv, equipment) {
+  if (!invUI) return null;
+
+  // Equipment slots (only if occupied)
+  const eq = equipment || {};
+  for (const [slotName, r] of Object.entries(invUI.equipSlots || {})) {
+    if (mx >= r.x && mx <= r.x + r.w && my >= r.y && my <= r.y + r.h) {
+      const itemId = eq[slotName];
+      if (!itemId) return null;
+      return { id: itemId, qty: 1, source: "equip", rect: r };
+    }
+  }
+
+  // Inventory grid slots
+  const g = invUI.grid;
+  if (!g) return null;
+  if (mx < g.x || my < g.y || mx > g.x + g.w || my > g.y + g.h) return null;
+
+  const sx = Math.floor((mx - g.x) / g.slotSize);
+  const sy = Math.floor((my - g.y) / g.slotSize);
+  if (sx < 0 || sy < 0 || sx >= g.cols || sy >= g.rows) return null;
+
+  const slotIndex = sy * g.cols + sx;
+  const slot = inv?.slots ? inv.slots[slotIndex] : null;
+  if (!slot) return null;
+
+  const rect = { x: g.x + sx * g.slotSize, y: g.y + sy * g.slotSize, w: g.slotSize, h: g.slotSize };
+  return { id: slot.id, qty: slot.qty || 1, source: "grid", rect };
+}
+
+function drawInventoryTooltip(hover, preferX, preferY) {
+  if (!hover || !hover.id) return;
+
+  const { name, desc, metaLines } = getItemTooltipData(hover.id, hover.qty);
+
+  const PAD = 10;
+  const GAP = 8;
+  const ICON = 56; // slightly larger than the 32px inventory icon
+  const W = 240;
+
+  // Wrap description
+  const descLines = wrapTooltipText(desc, W - PAD * 2, "12px system-ui");
+
+  // Compute height
+  const nameH = 16;
+  const metaH = metaLines.length ? (metaLines.length * 14 + 4) : 0;
+  const descH = descLines.length ? (descLines.length * 14 + 2) : 0;
+  const H = PAD + nameH + GAP + ICON + (metaH ? GAP + metaH : 0) + (descH ? GAP + descH : 0) + PAD;
+
+  // Position & clamp inside canvas
+  let x = Math.round(preferX);
+  let y = Math.round(preferY);
+  x = clamp(x, 8, canvas.width - W - 8);
+  y = clamp(y, 8, canvas.height - H - 8);
+
+  // Background
+  ctx.save();
+  ctx.fillStyle = "rgba(0,0,0,0.88)";
+  ctx.fillRect(x, y, W, H);
+  ctx.strokeStyle = "rgba(255,255,255,0.22)";
+  ctx.strokeRect(x + 0.5, y + 0.5, W - 1, H - 1);
+
+  // Name
+  ctx.font = "bold 13px system-ui";
+  ctx.fillStyle = "#fff";
+  ctx.textBaseline = "top";
+  ctx.textAlign = "left";
+  ctx.fillText(name, x + PAD, y + PAD);
+
+  // Image (left-justified)
+  const img = equipIcons[hover.id];
+  const ix = Math.round(x + PAD); // left align with text
+  const iy = Math.round(y + PAD + nameH + GAP);
+if (img && img.complete && img.naturalWidth > 0) {
+    ctx.imageSmoothingEnabled = false;
+    ctx.drawImage(img, ix, iy, ICON, ICON);
+  } else {
+    ctx.fillStyle = "rgba(255,255,255,0.10)";
+    ctx.fillRect(ix, iy, ICON, ICON);
+    ctx.strokeStyle = "rgba(255,255,255,0.18)";
+    ctx.strokeRect(ix + 0.5, iy + 0.5, ICON - 1, ICON - 1);
+  }
+
+  // Meta
+  let cy = iy + ICON + GAP;
+  if (metaLines.length) {
+    ctx.font = "12px system-ui";
+    ctx.fillStyle = "rgba(255,255,255,0.86)";
+    for (const t of metaLines) {
+      ctx.fillText(t, x + PAD, cy);
+      cy += 14;
+    }
+    cy += 4;
+  }
+
+  // Desc
+  if (descLines.length) {
+    ctx.font = "12px system-ui";
+    ctx.fillStyle = "rgba(255,255,255,0.82)";
+    for (const t of descLines) {
+      ctx.fillText(t, x + PAD, cy);
+      cy += 14;
+    }
+  }
+
+  ctx.restore();
+}
+
 function drawLootPops() {
   const now = performance.now();
   for (let i = lootPops.length - 1; i >= 0; i--) {
@@ -3553,8 +3756,18 @@ drawSprite(bodySprite, drawX, drawY, renderDir, bodyFrame, bodyFW, bodyFH);
   if (inventoryOpen) {
     const me = worldPlayers[myId];
     drawInventory(me?.inventory, me?.equipment);
+
+    // Tooltip (on hover)
+    if (uiMouse.has && invUI) {
+      invHover = getInventoryHover(uiMouse.mx, uiMouse.my, me?.inventory, me?.equipment);
+      if (invHover) {
+        // Prefer to the right/bottom of the cursor.
+        drawInventoryTooltip(invHover, uiMouse.mx + 18, uiMouse.my + 18);
+      }
+    }
   } else {
     invUI = null;
+    invHover = null;
   }
   drawLevelToast();
 
