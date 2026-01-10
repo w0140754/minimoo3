@@ -43,20 +43,26 @@ const wss = new WebSocketServer({ server });
 
 /* ======================
    MAPS (multi-zone)
-   0 floor
-   1 wall
+   Ground tiles use tiles.png indices (0-based).
+   Convention: odd rows are passable, even rows are blocked.
+   (portal positions are defined separately)
    (portal positions are defined separately)
    4 statue (save)
 ====================== */
 const TILE = 64;
 const PORTAL_TILE = 3;
+// tiles.png has 5 columns per row (matches client TILESET_COLS)
+const GROUND_TILESET_COLS = 5;
+// Convention: odd rows in tiles.png are passable; even rows are blocked.
+// Row 2, Col 1 (1-based) is our default wall/stone tile.
+const WALL_TILE = GROUND_TILESET_COLS; // == 5 when cols=5
 // Map editor: allow painting any ground tile id up to this value (client will only show what exists in tiles.png)
 const EDITOR_MAX_GROUND_TILE = 999;
 function makeBorderMap(w, h) {
   const map = Array.from({ length: h }, () => Array(w).fill(0));
   for (let y = 0; y < h; y++) {
     for (let x = 0; x < w; x++) {
-      if (x === 0 || y === 0 || x === w - 1 || y === h - 1) map[y][x] = 1;
+      if (x === 0 || y === 0 || x === w - 1 || y === h - 1) map[y][x] = WALL_TILE;
     }
   }
   return map;
@@ -71,25 +77,25 @@ function makeMapA() {
   // Map A from your editor export (25x18)
   const w = 25, h = 18;
 
-  // Ground: 0 = walkable, 1 = wall
-  const map = [[0,0,0,1,1,1,0,0,1,1,1,0,1,1,1,0,0,0,0,0,0,0,0,1,0],
-[0,0,1,1,0,0,0,0,0,1,1,0,1,1,0,0,0,0,0,0,0,0,1,1,1],
-[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,0],
+  // Ground (legacy export): 0 = walkable, 1 = wall
+  const map = [[0,0,0,5,5,5,0,0,5,5,5,0,5,5,5,0,0,0,0,0,0,0,0,5,0],
+[0,0,5,5,0,0,0,0,0,5,5,0,5,5,0,0,0,0,0,0,0,0,5,5,5],
+[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,5,0],
 [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
-[0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
-[1,1,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
-[0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
+[0,5,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
+[5,5,5,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
+[0,5,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
 [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
 [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
 [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
-[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,1,0,0,0,0,0,0,0,0],
-[1,0,0,0,0,0,0,0,0,0,0,0,0,0,1,1,1,1,0,0,0,0,1,0,0],
-[1,0,0,0,0,1,1,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,0,0],
-[1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
+[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,5,5,0,0,0,0,0,0,0,0],
+[5,0,0,0,0,0,0,0,0,0,0,0,0,0,5,5,5,5,0,0,0,0,5,0,0],
+[5,0,0,0,0,5,5,5,0,0,0,0,0,0,0,0,0,0,0,0,0,0,5,0,0],
+[5,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
 [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
-[0,0,0,0,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
-[0,0,0,0,0,0,1,0,0,0,1,0,1,0,0,0,0,0,0,0,0,0,1,0,0],
-[0,0,0,0,0,1,1,0,0,0,1,1,1,0,0,0,0,0,0,0,0,1,1,0,0]];
+[0,0,0,0,0,0,5,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
+[0,0,0,0,0,0,5,0,0,0,5,0,5,0,0,0,0,0,0,0,0,0,5,0,0],
+[0,0,0,0,0,5,5,0,0,0,5,5,5,0,0,0,0,0,0,0,0,5,5,0,0]];
 
   // Objects: uses the same numeric IDs as your current tiles_objects.png
   const obj = [[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,7,0,0,0,0,0,0],
@@ -117,7 +123,6 @@ function makeMapA() {
   const pToD = { x: 0,  y: Math.floor(h / 2), to: "D" }; // A -> D (left portal: snails)
   // Ensure portal tile stays walkable ground
   map[pToD.y][pToD.x] = 0;
-
   return { id: "A", w, h, map, obj, portals: [pToC, pToB, pToD] };
 }
 
@@ -127,8 +132,8 @@ function makeMapB() {
   const obj = makeEmptyLayer(w, h, 0);
 
 
-  for (let x = 3; x < w - 3; x++) map[6][x] = (x % 3 === 0) ? 1 : 0;
-  for (let y = 3; y < h - 3; y++) map[y][13] = (y % 4 === 0) ? 1 : 0;
+  for (let x = 3; x < w - 3; x++) map[6][x] = (x % 3 === 0) ? WALL_TILE : 0;
+  for (let y = 3; y < h - 3; y++) map[y][13] = (y % 4 === 0) ? WALL_TILE : 0;
 
   // Portal back to A (left edge)
   const pToA = { x: 1, y: Math.floor(h / 2), to: "A" };
@@ -153,14 +158,26 @@ function makeMapB() {
 
 function makeMapC() {
   const w = 18, h = 12;
-  const map = [[0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1], [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1], [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1], [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], [1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], [1, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], [1, 0, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], [1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], [0, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]];
-  const obj = [[6, 0, 6, 0, 1, 0, 1, 7, 0, 7, 0, 1, 0, 6, 7, 0, 6, 0], [0, 3, 0, 0, 6, 0, 6, 0, 0, 0, 0, 6, 0, 0, 0, 0, 0, 0], [0, 8, 0, 1, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 1, 0, 0, 1], [1, 0, 0, 6, 0, 1, 0, 6, 0, 0, 0, 0, 0, 0, 6, 1, 0, 6], [6, 0, 0, 0, 0, 6, 0, 0, 0, 0, 1, 0, 3, 0, 0, 6, 0, 0], [0, 0, 0, 1, 0, 1, 0, 0, 0, 3, 6, 7, 8, 0, 0, 0, 0, 1], [1, 0, 1, 6, 0, 6, 0, 0, 7, 8, 7, 0, 7, 7, 0, 0, 0, 6], [6, 0, 6, 0, 0, 0, 0, 0, 0, 7, 0, 0, 0, 0, 0, 0, 1, 0], [1, 0, 1, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 6, 1], [6, 0, 6, 0, 6, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 6], [1, 0, 0, 0, 0, 0, 0, 0, 0, 1, 6, 1, 0, 7, 0, 6, 0, 0], [6, 1, 0, 1, 0, 7, 0, 0, 1, 6, 1, 6, 1, 0, 0, 0, 0, 7]];
+  const map = [[0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 5], [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 5], [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 5], [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], [5, 5, 5, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], [5, 0, 5, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], [5, 0, 5, 5, 5, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], [5, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], [0, 5, 5, 5, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]];
+  const obj = [
+    [6, 0, 6, 0, 1, 0, 1, 7, 0, 7, 0, 1, 0, 6, 7, 0, 6, 0],
+    [0, 3, 0, 0, 6, 0, 6, 0, 0, 0, 0, 6, 0, 0, 0, 0, 0, 0],
+    [0, 8, 0, 1, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 1, 0, 0, 1],
+    [1, 0, 0, 6, 0, 1, 0, 6, 0, 0, 0, 0, 0, 0, 6, 1, 0, 6],
+    [6, 0, 0, 0, 0, 6, 0, 0, 0, 0, 1, 0, 3, 0, 0, 6, 0, 0],
+    [0, 0, 0, 1, 0, 1, 0, 0, 0, 3, 6, 7, 8, 0, 0, 0, 0, 1],
+    [1, 0, 1, 6, 0, 6, 0, 0, 7, 8, 7, 0, 0, 7, 0, 0, 0, 6],
+    [6, 0, 6, 0, 0, 0, 0, 0, 0, 7, 0, 0, 0, 0, 0, 0, 1, 0],
+    [1, 0, 1, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 6, 1],
+    [6, 0, 6, 0, 6, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 6],
+    [1, 0, 0, 0, 0, 0, 0, 0, 0, 1, 6, 1, 0, 7, 0, 6, 0, 0],
+    [6, 1, 0, 1, 0, 7, 0, 0, 1, 6, 1, 6, 1, 0, 0, 0, 0, 7]
+  ];
 
   // Portal back to A (left edge)
   const pToA = { x: 1, y: Math.floor(h / 2), to: "A" };
   // Ensure the portal tile itself stays as ground (0 = grass)
   map[pToA.y][pToA.x] = 0;
-
   return { id: "C", w, h, map, obj, portals: [pToA] };
 }
 
@@ -203,7 +220,6 @@ function makeMapD() {
   // Portal back to A (right edge, mid)
   const pToA = { x: w - 1, y: Math.floor(h / 2), to: "A" };
   map[pToA.y][pToA.x] = 0;
-
   return { id: "D", w, h, map, obj, portals: [pToA] };
 }
 
@@ -237,10 +253,10 @@ let maps = {
 
 function tileAt(mapId, x, y) {
   const m = maps[mapId];
-  if (!m) return 1;
+  if (!m) return WALL_TILE;
   const tx = Math.floor(x / TILE);
   const ty = Math.floor(y / TILE);
-  if (tx < 0 || ty < 0 || tx >= m.w || ty >= m.h) return 1;
+  if (tx < 0 || ty < 0 || tx >= m.w || ty >= m.h) return WALL_TILE;
   return m.map[ty][tx];
 }
 
@@ -253,8 +269,17 @@ function objAt(mapId, x, y) {
   return (m.obj && m.obj[ty] ? m.obj[ty][tx] : 0) || 0;
 }
 
-// Ground collision tiles
-function isSolid(tile) { return tile === 1; }
+// Ground collision tiles (tiles.png indices are 0-based)
+function groundTileRow1Based(tile) {
+  if (tile == null || tile < 0) return 0;
+  const row0 = Math.floor(tile / GROUND_TILESET_COLS);
+  return row0 + 1; // 1-based
+}
+// Odd rows are passable, even rows are blocked.
+function isSolid(tile) {
+  const r = groundTileRow1Based(tile);
+  return r > 0 && (r % 2 === 0);
+}
 
 // tiles_objects.png has 5 columns per row (matches client TILESET_COLS)
 const OBJ_TILESET_COLS = 5;
@@ -552,6 +577,7 @@ const ITEMS = {
   charger_suit: { id: "charger_suit", name: "Charger Suit", type: "armor", slot: "armor", maxStack: 1 },
   cloth_hat:     { id: "cloth_hat",     name: "Cloth Hat",     type: "hat",       slot: "hat",       maxStack: 1 },
   charger_helmet: { id: "charger_helmet", name: "Charger Helmet", type: "hat", slot: "hat", maxStack: 1 },
+  red_duke: { id: "red_duke", name: "Red Duke", type: "hat", slot: "hat", maxStack: 1 },
   lucky_charm:   { id: "lucky_charm",   name: "Lucky Charm",   type: "accessory", slot: "accessory", maxStack: 1 }
 };
 
@@ -697,6 +723,30 @@ function spawnNpc({ id, name, mapId, tx, ty, x, y, sprite }) {
 // Starting map (C): place both new NPCs
 spawnNpc({ id: "npc_crystal", name: "Crystal", mapId: "C", tx: 6, ty: 6, sprite: "npcs/npc_crystal.png" });
 spawnNpc({ id: "npc_girl",    name: "Girl",    mapId: "C", tx: 11, ty: 6, sprite: "npcs/npc_girl.png" });
+spawnNpc({ id: "npc_jangoon", name: "Jangoon", mapId: "C", tx: 12, ty: 6, sprite: "npcs/npc_jangoon.png" });
+
+
+// Starter quest: Jangoon -> kill 10 green slimes -> reward Red Duke
+function getJangoonQuest(p) {
+  if (!p.quests) p.quests = {};
+  if (!p.quests.jangoon_red_duke) {
+    p.quests.jangoon_red_duke = { started: false, kills: 0, completed: false, rewarded: false };
+  }
+  return p.quests.jangoon_red_duke;
+}
+
+function handleQuestProgress(p, mob) {
+  if (!p || !mob) return;
+  const q = getJangoonQuest(p);
+  if (!q.started || q.rewarded) return;
+
+  // Only count green slime kills
+  if (mob.mobType !== "green") return;
+
+  const NEED = 10;
+  q.kills = Math.min(NEED, (q.kills || 0) + 1);
+  if (q.kills >= NEED) q.completed = true;
+}
 
 const npcDialogue = {
   npc_crystal: [
@@ -706,6 +756,10 @@ const npcDialogue = {
   npc_girl: [
     "Hi! Welcome 🙂",
     "Left-click to attack • I for inventory",
+  ],
+  npc_jangoon: [
+    "…",
+    "I have work for you, if you’re willing.",
   ],
 };
 
@@ -936,6 +990,10 @@ wss.on("connection", (ws) => {
 
     // inventory (server authoritative)
     inventory: { size: 24, slots: [ { id: "training_sword", qty: 1 }, { id: "training_spear", qty: 1 }, { id: "candy_cane_spear", qty: 1 }, { id: "fang_spear", qty: 1 }, { id: "training_wand", qty: 1 }, { id: "cloth_armor", qty: 1 }, { id: "charger_suit", qty: 1 }, { id: "cloth_hat", qty: 1 }, { id: "charger_helmet", qty: 1 }, { id: "lucky_charm", qty: 1 }, ...Array(19).fill(null) ] },
+
+// quests (server authoritative)
+quests: { jangoon_red_duke: { started: false, kills: 0, completed: false, rewarded: false } },
+
 
 // skills (server authoritative timers)
 skill1ActiveUntilMs: 0,
@@ -1183,6 +1241,7 @@ if (msg.type === "skill2DoubleStab") {
         });
 
         if (m.hp <= 0) {
+              handleQuestProgress(p, m);
           awardXp(p, 12);
           const coins = 2 + Math.floor(Math.random() * 4);
           spawnCoins(m.mapId, m.x, m.y, coins);
@@ -1393,7 +1452,41 @@ if (msg.type === "skill2DoubleStab") {
       const INTERACT_RANGE = 80;
       if (dist(p.x, p.y, npc.x, npc.y) > INTERACT_RANGE) return;
 
+      
+      // Special NPC: Jangoon starter quest (kill 10 green slimes -> Red Duke)
+      if (npcId === "npc_jangoon") {
+        const q = getJangoonQuest(p);
+        const NEED = 10;
+
+        if (!q.started) {
+          q.started = true;
+          q.kills = 0;
+          q.completed = false;
+          q.rewarded = false;
+          send(ws, { type: "dialogue", npcId, npcName: npc.name || npcId, text: `Quest started: Slime Cleanup!\nKill ${NEED} green slimes. (0/${NEED})` });
+          return;
+        }
+
+        if (!q.completed && (q.kills || 0) >= NEED) q.completed = true;
+
+        if (q.completed && !q.rewarded) {
+          addItemToInventory(p, "red_duke", 1);
+          q.rewarded = true;
+          send(ws, { type: "dialogue", npcId, npcName: npc.name || npcId, text: "Well done. Take this: Red Duke." });
+          return;
+        }
+
+        if (!q.completed) {
+          send(ws, { type: "dialogue", npcId, npcName: npc.name || npcId, text: `Slime Cleanup progress: ${q.kills || 0}/${NEED} green slimes.` });
+          return;
+        }
+
+        send(ws, { type: "dialogue", npcId, npcName: npc.name || npcId, text: "Stay sharp out there." });
+        return;
+      }
+
       const lines = npcDialogue[npcId] || ["..."];
+
       const text = lines[Math.floor(Math.random() * lines.length)];
       send(ws, { type: "dialogue", npcId, npcName: npc.name || npcId, text });
       return;
@@ -1502,6 +1595,7 @@ if (hasAimDir) {
             });
 
             if (m.hp <= 0) {
+              handleQuestProgress(p, m);
               awardXp(p, 12);
               const coins = 2 + Math.floor(Math.random() * 4);
               spawnCoins(m.mapId, m.x, m.y, coins);
@@ -1543,6 +1637,7 @@ if (hasAimDir) {
         });
 
             if (m.hp <= 0) {
+              handleQuestProgress(p, m);
               awardXp(p, 12);
               const coins = 2 + Math.floor(Math.random() * 4);
               spawnCoins(m.mapId, m.x, m.y, coins);
@@ -1865,8 +1960,9 @@ function tickStep(dt) {
           projectiles.delete(pid);
 
           if (m.hp <= 0) {
-            // award xp to owner if still around
+            // award xp / quest to projectile owner if still around
             const owner = players.get(pr.ownerId);
+            if (owner) handleQuestProgress(owner, m);
             if (owner) awardXp(owner, 12);
 
             const coins = 2 + Math.floor(Math.random() * 4);
@@ -2199,4 +2295,3 @@ server.listen(PORT, () => {
   console.log(`🚀 Server running on port ${PORT} (TILE=${TILE}, PORTAL_TILE=${PORTAL_TILE})`);
   console.log(`Maps: A=${maps.A.w}x${maps.A.h}, B=${maps.B.w}x${maps.B.h}, C=${maps.C.w}x${maps.C.h}, D=${maps.D.w}x${maps.D.h}`);
 });
-
