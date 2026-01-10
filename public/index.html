@@ -119,6 +119,8 @@ const SKILL2_VIS_MS = 360;
 
 const TILE_PAD = 1;
 const TILESET_COLS = 5; // tiles per row in tiles.png and tiles_objects.png
+// Convention: odd rows in tiles.png are passable; even rows are blocked.
+const WALL_TILE = TILESET_COLS; // row 2, col 1 (1-based) when cols=5
 
 const LOCAL_SWING_DUR = 0.18; // must match server p.atkAnim start value
 const ATTACK_DELAY_MS = 300; // local input throttle (server also enforces)
@@ -287,9 +289,11 @@ const NPC_SORT_Y_OFFSET = 22;
 const npcImages = {
   "npcs/npc_crystal.png": new Image(),
   "npcs/npc_girl.png": new Image(),
+  "npcs/npc_jangoon.png": new Image(),
 };
 npcImages["npcs/npc_crystal.png"].src = "/assets/npcs/npc_crystal.png";
 npcImages["npcs/npc_girl.png"].src    = "/assets/npcs/npc_girl.png";
+npcImages["npcs/npc_jangoon.png"].src = "/assets/npcs/npc_jangoon.png";
 
 
 // Attack weapon sprites (spears can swap art based on equipped spear item)
@@ -506,6 +510,7 @@ const equipIcons = {
   candy_cane_spear: new Image(),
   fang_spear:       new Image(),
   charger_helmet: new Image(),
+  red_duke:       new Image(),
   charger_suit: new Image(),
   orange_flan: new Image(),
 };
@@ -516,6 +521,7 @@ equipIcons.training_wand.src  = "/assets/equipment/training_wand.png";
 equipIcons.cloth_armor.src    = "/assets/equipment/cloth_armor.png";
 equipIcons.cloth_hat.src      = "/assets/equipment/cloth_hat.png";
 equipIcons.charger_helmet.src = "/assets/equipment/charger_helmet.png";
+equipIcons.red_duke.src       = "/assets/equipment/red_duke.png";
 equipIcons.charger_suit.src = "/assets/equipment/charger_suit.png";
 equipIcons.orange_flan.src = "/assets/items/orange_flan.png";
 equipIcons.lucky_charm.src    = "/assets/equipment/lucky_charm.png";
@@ -544,22 +550,24 @@ armorOverlays.cloth_armor.src = "/assets/equipment/overlays/overlay_cloth_armor.
 
 armorOverlays.charger_suit.src = "/assets/equipment/overlays/overlay_charger_suit.png";
 // Hat overlays for walking/moving (3 cols x 4 rows, 64x64 frames)
-const hatOverlays = { cloth_hat: new Image(), charger_helmet: new Image() };
+const hatOverlays = { cloth_hat: new Image(), charger_helmet: new Image(), red_duke: new Image() };
 hatOverlays.cloth_hat.src = "/assets/equipment/overlays/overlay_cloth_hat.png";
 
 
 hatOverlays.charger_helmet.src = "/assets/equipment/overlays/overlay_charger_helmet.png";
+hatOverlays.red_duke.src = "/assets/equipment/overlays/overlay_red_duke.png";
 // Idle overlays (2 cols x 4 rows, 64x64 frames)
 const armorIdleOverlays = { cloth_armor: new Image(), charger_suit: new Image() };
 armorIdleOverlays.cloth_armor.src = "/assets/equipment/overlays/overlay_idle_cloth_armor.png";
 armorIdleOverlays.charger_suit.src = "/assets/equipment/overlays/overlay_idle_charger_suit.png";
-const hatIdleOverlays = { cloth_hat: new Image(), charger_helmet: new Image() };
+const hatIdleOverlays = { cloth_hat: new Image(), charger_helmet: new Image(), red_duke: new Image() };
 hatIdleOverlays.cloth_hat.src = "/assets/equipment/overlays/overlay_idle_cloth_hat.png";
 
 
 
 
 hatIdleOverlays.charger_helmet.src = "/assets/equipment/overlays/overlay_idle_charger_helmet.png";
+hatIdleOverlays.red_duke.src = "/assets/equipment/overlays/overlay_idle_red_duke.png";
 /* ======================
    CANVAS
 ====================== */
@@ -1720,7 +1728,7 @@ function drawMap() {
 
 
  else {
-        ctx.fillStyle = tile === 1 ? "#555" : "#2b2b2b";
+        ctx.fillStyle = isSolid(tile) ? "#555" : "#2b2b2b";
         ctx.fillRect(px, py, TILE_SIZE, TILE_SIZE);
       }
     }
@@ -1747,14 +1755,22 @@ function isObjCanopy(objTile) {
 
 // Even rows (2,4,6,...) are solid: blocks movement and is depth-sorted with entities
 
-function isSolid(tile) { return tile === 1; }
+function groundTileRow1Based(tile) {
+  if (tile == null || tile < 0) return 0;
+  const row0 = Math.floor(tile / TILESET_COLS);
+  return row0 + 1;
+}
+function isSolid(tile) {
+  const r = groundTileRow1Based(tile);
+  return r > 0 && (r % 2 === 0);
+}
 
 function tileAtWorld(wx, wy) {
-  if (!map) return 0;
+  if (!map) return WALL_TILE;
   const tx = Math.floor(wx / TILE_SIZE);
   const ty = Math.floor(wy / TILE_SIZE);
-  if (ty < 0 || ty >= map.length) return 0;
-  if (tx < 0 || tx >= map[0].length) return 0;
+  if (ty < 0 || ty >= map.length) return WALL_TILE;
+  if (tx < 0 || tx >= map[0].length) return WALL_TILE;
   return map[ty][tx] | 0;
 }
 
@@ -3011,6 +3027,8 @@ const ITEM_INFO = {
   charger_suit:    { name: "Charger Suit",    desc: "Sturdy armor with a metallic sheen." },
   cloth_hat:       { name: "Cloth Hat",       desc: "Keeps the sun out of your eyes." },
   charger_helmet:  { name: "Charger Helmet",  desc: "A helmet with a solid visor." },
+  red_duke: { equipType: "Hat" },
+  red_duke: { name: "Red Duke", type: "hat", stats: "", desc: "A duke’s helm, dyed crimson." },
   lucky_charm:     { name: "Lucky Charm",     desc: "Maybe it really is lucky." },
 };
 
@@ -3392,11 +3410,12 @@ function loop(nowMs) {
   }
 
   const me = getMyPos();
-  if (me && isOnPortal()) drawPrompt(me, "Press E to travel");
+
+  // Defer world-space prompts until after objects/canopies + nameplates so they never render under the object layer.
+  const portalPrompt = (me && isOnPortal()) ? { near: me, text: "Press E to travel", spriteH: PLAYER_FRAME_H } : null;
 
   cachedNearestNpc = computeNearestNpc();
-  if (cachedNearestNpc) drawPrompt(cachedNearestNpc, "Press E", NPC_DRAW_H);
-
+  const npcPrompt = cachedNearestNpc ? { near: cachedNearestNpc, text: "Press E", spriteH: NPC_DRAW_H } : null;
   const entities = [];
 
   // object-layer solids (stumps/rocks) depth-sort with entities so you can walk behind them
@@ -3745,6 +3764,10 @@ drawSprite(bodySprite, drawX, drawY, renderDir, bodyFrame, bodyFW, bodyFH);
   for (const np of nameplates) {
     drawNameplate(np.x, np.y, np.level, np.name, np.spriteH);
   }
+
+  // prompts after canopies + nameplates so they're always visible
+  if (portalPrompt) drawPrompt(portalPrompt.near, portalPrompt.text, portalPrompt.spriteH);
+  if (npcPrompt) drawPrompt(npcPrompt.near, npcPrompt.text, npcPrompt.spriteH);
 
   drawDialogueBubble(activeDialogue);
 
