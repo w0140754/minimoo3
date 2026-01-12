@@ -720,6 +720,8 @@ const equipIcons = {
   red_duke:       new Image(),
   charger_suit: new Image(),
   orange_flan: new Image(),
+  potion_green: new Image(),
+  potion_purple: new Image(),
 };
 
 equipIcons.training_sword.src = "/assets/equipment/training_sword.png";
@@ -734,6 +736,9 @@ equipIcons.orange_flan.src = "/assets/items/orange_flan.png";
 equipIcons.lucky_charm.src    = "/assets/equipment/lucky_charm.png";
 equipIcons.candy_cane_spear.src = "/assets/candy_cane_spear.png";
 equipIcons.fang_spear.src       = "/assets/fang_spear.png";
+equipIcons.potion_green.src  = "/assets/items/potion_green.png";
+equipIcons.potion_purple.src = "/assets/items/potion_purple.png";
+
 
 function drawItemIcon(itemId, x, y, slotSize) {
   const img = equipIcons[itemId];
@@ -2619,14 +2624,21 @@ function drawCoin(x, y, amount) {
 
 const itemSprites = {
   orange_flan: new Image(),
+  potion_green: new Image(),
+  potion_purple: new Image(),
 };
-itemSprites.orange_flan.src = "/assets/items/orange_flan.png";
+
+itemSprites.orange_flan.src  = "/assets/items/orange_flan.png";
+itemSprites.potion_green.src = "/assets/items/potion_green.png";
+itemSprites.potion_purple.src = "/assets/items/potion_purple.png";
+
+
 
 function drawItemDrop(itemId, x, y) {
   const img = itemSprites[itemId];
   if (!img) return;
   if (!img.complete) return;
-  const w = 24, h = 24;
+  const w = 32, h = 32;
   ctx.drawImage(img, Math.round(x - w/2), Math.round(y - h/2), w, h);
 }
 
@@ -3232,19 +3244,22 @@ const ITEM_INFO = {
   coin:            { name: "Coin",            desc: "Currency picked up from mobs." },
   orange_flan:     { name: "Orange Flan",     desc: "A wobbly snack. Looks suspiciously delicious." },
   potion_small:    { name: "Small Potion",    desc: "Restores 25 HP." },
+  potion_green:    { name: "Green Slime Tonic",    desc: "Restores 50 HP." },
+  potion_purple:    { name: "Purple Slime Tonic",    desc: "Restores 300 HP." },
+
 
   training_sword:  { name: "Training Sword",  desc: "A basic sword for practice." },
-  training_spear:  { name: "Training Spear",  desc: "A basic spear for practice." },
-  candy_cane_spear:{ name: "Candy Cane Spear",desc: "Festive… and pointy." },
-  fang_spear:      { name: "Fang Spear",      desc: "A spear tipped with a wicked fang." },
+  training_spear:  { name: "Hunting Spear",  desc: "A basic spear for practice." },
+  candy_cane_spear:{ name: "North Pole",desc: "Festive… and pointy." },
+  fang_spear:      { name: "Twin Fang",      desc: "A spear tipped with a wicked fang." },
   training_wand:   { name: "Training Wand",   desc: "A simple wand for new mages." },
 
-  cloth_armor:     { name: "Cloth Armor",     desc: "Light protection." },
+  cloth_armor:     { name: "Apprentice Robe",     desc: "Light protection." },
   charger_suit:    { name: "Charger Suit",    desc: "Sturdy armor with a metallic sheen." },
-  cloth_hat:       { name: "Cloth Hat",       desc: "Keeps the sun out of your eyes." },
+  cloth_hat:       { name: "Apprentice Hat",       desc: "Keeps the sun out of your eyes." },
   charger_helmet:  { name: "Charger Helmet",  desc: "A helmet with a solid visor." },
   red_duke: { name: "Red Duke", type: "hat", stats: "", desc: "A duke’s helm, dyed crimson." },
-  lucky_charm:     { name: "Lucky Charm",     desc: "Maybe it really is lucky." },
+  lucky_charm:     { name: "Four-Leaf",     desc: "Maybe it really is lucky." },
 };
 
 // Minimal item meta for tooltip "splash" lines (type + weapon speed).

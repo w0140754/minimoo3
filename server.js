@@ -497,8 +497,10 @@ function killMobAndReward(m, killerId) {
   }
 
   const coins = 2 + Math.floor(Math.random() * 4);
-  spawnCoins(m.mapId, m.x, m.y, coins);
-  maybeDropOrangeFlan(m);
+  
+	spawnCoins(m.mapId, m.x, m.y, coins);
+	rollMobDrops(m);
+
 
   m.deadAtMs = Date.now();
   m.corpseUntilMs = m.deadAtMs + 2000;
@@ -542,13 +544,57 @@ function spawnItemDrop(mapId, x, y, itemId, qty = 1) {
 }
 
 
-function maybeDropOrangeFlan(m) {
+// ======================
+// MOB DROPS (future-proof)
+// - Add drops per mobType here.
+// - Each entry is rolled independently.
+// - qty can be a number OR { min, max }.
+// ======================
+const MOB_DROP_TABLE = {
   // Orange slimes drop orange flan 25% of the time.
-  if (m.mobType !== "orange") return;
-  if (Math.random() < 0.25) {
-    spawnItemDrop(m.mapId, m.x, m.y, "orange_flan", 1);
+  orange: [
+    { itemId: "orange_flan", chance: 0.25, qty: 1 },
+  ],
+
+  // Green slimes drop green potions 10% of the time.
+  green: [
+    { itemId: "potion_green", chance: 0.3, qty: 1 },
+  ],
+};
+
+function resolveDropQty(qtySpec) {
+  if (typeof qtySpec === "number") return qtySpec;
+  if (!qtySpec || typeof qtySpec !== "object") return 1;
+
+  const min = Math.max(1, Math.floor(qtySpec.min ?? 1));
+  const max = Math.max(min, Math.floor(qtySpec.max ?? min));
+  return min + Math.floor(Math.random() * (max - min + 1));
+}
+
+function rollMobDrops(m) {
+  if (!m) return;
+
+  const dropsForType = MOB_DROP_TABLE[m.mobType];
+  if (!dropsForType || dropsForType.length === 0) return;
+
+  for (const d of dropsForType) {
+    if (!d?.itemId) continue;
+
+    const chance = Math.max(0, Math.min(1, Number(d.chance ?? 0)));
+    if (chance <= 0) continue;
+    if (Math.random() >= chance) continue;
+
+    const qty = resolveDropQty(d.qty ?? 1);
+    if (qty <= 0) continue;
+
+    // Safety: only drop items that exist in ITEMS table
+    if (!ITEMS[d.itemId]) continue;
+
+    spawnItemDrop(m.mapId, m.x, m.y, d.itemId, qty);
   }
 }
+
+
 
 function maybePickupDropsForPlayer(p) {
   const nowMs = Date.now();
@@ -597,16 +643,37 @@ const ITEMS = {
       p.hp = Math.min(p.maxHp, p.hp + 25);
     }
   },
+  
+  potion_green: {
+  id: "potion_green",
+  name: "Green Slime Tonic",
+  maxStack: 20,
+  onUse(player) {
+    const HEAL = 50;
+    player.hp = Math.min(player.maxHp, player.hp + HEAL);
+  },
+},
 
+potion_purple: {
+  id: "potion_purple",
+  name: "Purple Slime Tonic",
+  maxStack: 10,
+  onUse(player) {
+    const HEAL = 300;
+    player.hp = Math.min(player.maxHp, player.hp + HEAL);
+  },
+},
+
+  
   // equipment (MapleStory-style)
   training_sword: { id: "training_sword", name: "Training Sword", type: "weapon", slot: "weapon", weaponKey: "sword", maxStack: 1 , weaponSpeed: 1.75 },
   training_spear: { id: "training_spear", name: "Training Spear", type: "weapon", slot: "weapon", weaponKey: "spear", maxStack: 1 , weaponSpeed: 1.5 },
-  candy_cane_spear: { id: "candy_cane_spear", name: "Candy Cane Spear", type: "weapon", slot: "weapon", weaponKey: "spear", maxStack: 1 , weaponSpeed: 1.75 },
-  fang_spear:       { id: "fang_spear",       name: "Fang Spear",       type: "weapon", slot: "weapon", weaponKey: "spear", maxStack: 1 , weaponSpeed: 1.5 },
+  candy_cane_spear: { id: "candy_cane_spear", name: "North Pole", type: "weapon", slot: "weapon", weaponKey: "spear", maxStack: 1 , weaponSpeed: 1.75 },
+  fang_spear:       { id: "fang_spear",       name: "Twin Fang",       type: "weapon", slot: "weapon", weaponKey: "spear", maxStack: 1 , weaponSpeed: 1.5 },
   training_wand:  { id: "training_wand",  name: "Training Wand",  type: "weapon", slot: "weapon", weaponKey: "wand",  maxStack: 1 , weaponSpeed: 1 },
-  cloth_armor:   { id: "cloth_armor",   name: "Cloth Armor",   type: "armor",     slot: "armor",     maxStack: 1 },
+  cloth_armor:   { id: "cloth_armor",   name: "Apprentice Robe",   type: "armor",     slot: "armor",     maxStack: 1 },
   charger_suit: { id: "charger_suit", name: "Charger Suit", type: "armor", slot: "armor", maxStack: 1 },
-  cloth_hat:     { id: "cloth_hat",     name: "Cloth Hat",     type: "hat",       slot: "hat",       maxStack: 1 },
+  cloth_hat:     { id: "cloth_hat",     name: "Apprentice Hat",     type: "hat",       slot: "hat",       maxStack: 1 },
   charger_helmet: { id: "charger_helmet", name: "Charger Helmet", type: "hat", slot: "hat", maxStack: 1 },
   red_duke: { id: "red_duke", name: "Red Duke", type: "hat", slot: "hat", maxStack: 1 },
   lucky_charm:   { id: "lucky_charm",   name: "Lucky Charm",   type: "accessory", slot: "accessory", maxStack: 1 }
@@ -981,7 +1048,7 @@ wss.on("connection", (ws) => {
     equipment: { weapon: null, armor: null, hat: null, accessory: null },
 
     // inventory (server authoritative)
-    inventory: { size: 24, slots: [ { id: "training_sword", qty: 1 }, { id: "training_spear", qty: 1 }, { id: "candy_cane_spear", qty: 1 }, { id: "fang_spear", qty: 1 }, { id: "training_wand", qty: 1 }, { id: "cloth_armor", qty: 1 }, { id: "charger_suit", qty: 1 }, { id: "cloth_hat", qty: 1 }, { id: "charger_helmet", qty: 1 }, { id: "lucky_charm", qty: 1 }, ...Array(19).fill(null) ] },
+    inventory: { size: 24, slots: [ { id: "training_sword", qty: 1 }, { id: "training_spear", qty: 1 }, { id: "candy_cane_spear", qty: 1 }, { id: "fang_spear", qty: 1 }, { id: "training_wand", qty: 1 }, { id: "cloth_armor", qty: 1 }, { id: "charger_suit", qty: 1 }, { id: "cloth_hat", qty: 1 }, { id: "charger_helmet", qty: 1 }, { id: "lucky_charm", qty: 1 },{ id: "potion_green", qty: 2 },{ id: "potion_purple", qty: 2 },, ...Array(19).fill(null) ] },
 
 // quests (server authoritative)
 quests: { jangoon_red_duke: { started: false, kills: 0, completed: false, rewarded: false } },
