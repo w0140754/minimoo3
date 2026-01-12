@@ -27,7 +27,7 @@ if (pool) {
    DEV / READABILITY HELPERS
    - Toggle logging by setting: DEV.log = true
 ========================================================== */
-const DEV = { log: false };
+const DEV = { log: true };
 const dlog = (...args) => { if (DEV.log) console.log(...args); };
 
 const __dirname = path.dirname(url.fileURLToPath(import.meta.url));
@@ -67,6 +67,104 @@ async function ensurePostgresSchema() {
 
   console.log("✅ Postgres schema ensured.");
 }
+
+// Paste these below ensurePostgresSchema() (or anywhere above wss.on("connection")):
+
+
+async function dbLoadPlayerByName(name) {
+  if (!pool) return null;
+  const { rows } = await pool.query("select * from players where name = $1", [name]);
+  return rows[0] || null;
+}
+
+async function dbSavePlayer(p) {
+  if (!pool) return;
+  if (!p?.name) return;
+
+  await pool.query(
+    `
+    insert into players
+      (name, level, xp, xp_next, atk, hp, max_hp, map_id, x, y, gold, equipment, inventory, quests, updated_at)
+    values
+      ($1,   $2,    $3, $4,     $5,  $6, $7,     $8,    $9, $10,$11, $12::jsonb, $13::jsonb, $14::jsonb, now())
+    on conflict (name) do update set
+      level=excluded.level,
+      xp=excluded.xp,
+      xp_next=excluded.xp_next,
+      atk=excluded.atk,
+      hp=excluded.hp,
+      max_hp=excluded.max_hp,
+      map_id=excluded.map_id,
+      x=excluded.x,
+      y=excluded.y,
+      gold=excluded.gold,
+      equipment=excluded.equipment,
+      inventory=excluded.inventory,
+      quests=excluded.quests,
+      updated_at=now()
+    `,
+    [
+      p.name,
+      p.level ?? 1,
+      p.xp ?? 0,
+      p.xpNext ?? xpToNext(p.level ?? 1),
+      p.atk ?? 10,
+      p.hp ?? 100,
+      p.maxHp ?? 100,
+      p.mapId ?? "C",
+      Number.isFinite(p.x) ? p.x : 0,
+      Number.isFinite(p.y) ? p.y : 0,
+      p.gold ?? 0,
+      JSON.stringify(p.equipment || { weapon: null, armor: null, hat: null, accessory: null }),
+      JSON.stringify(p.inventory || { size: 24, slots: [] }),
+      JSON.stringify(p.quests || {}),
+    ]
+  );
+}
+
+function applyRowToPlayer(p, row) {
+  // Keep runtime-only fields (id, inputs, timers) but load the persistent ones
+  if (!row) return;
+
+  p.level = row.level ?? p.level;
+  p.xp = row.xp ?? p.xp;
+  p.xpNext = row.xp_next ?? p.xpNext;
+  p.atk = row.atk ?? p.atk;
+  p.hp = row.hp ?? p.hp;
+  p.maxHp = row.max_hp ?? p.maxHp;
+
+  // map/pos (validate)
+  const mapId = (row.map_id || p.mapId || "C").toString();
+  p.mapId = maps[mapId] ? mapId : (p.mapId || "C");
+  p.x = Number.isFinite(row.x) ? row.x : p.x;
+  p.y = Number.isFinite(row.y) ? row.y : p.y;
+
+  // jsonb comes back as object in pg
+  p.equipment = row.equipment && typeof row.equipment === "object"
+    ? row.equipment
+    : (p.equipment || { weapon: null, armor: null, hat: null, accessory: null });
+
+  p.inventory = row.inventory && typeof row.inventory === "object"
+    ? row.inventory
+    : (p.inventory || { size: 24, slots: [] });
+
+  p.quests = row.quests && typeof row.quests === "object"
+    ? row.quests
+    : (p.quests || {});
+
+  p.gold = row.gold ?? p.gold;
+
+  // Keep combat pipeline consistent with equipment
+  const equippedWeaponId = p.equipment?.weapon || null;
+  const def = equippedWeaponId ? ITEMS[equippedWeaponId] : null;
+  p.weapon = def?.weaponKey || null;
+
+  // Clamp in case map changed or coords are bad
+  clampToWorldPlayer(p.mapId, p);
+}
+
+
+
 
 
 
@@ -909,7 +1007,7 @@ skill2CdUntilMs: 0,
     weapons: WEAPONS,
   });
 
-  ws.on("message", (buf) => {
+ws.on("message", async (buf) => {
     let msg;
     try { msg = JSON.parse(buf.toString()); } catch { return; }
 
@@ -917,17 +1015,28 @@ skill2CdUntilMs: 0,
     const p = players.get(pid);
     if (!p) return;
 
-    if (msg.type === "setName") {
-      const raw = (msg.name ?? "").toString().trim();
-      // letters only, 4-8 chars
-      if (!/^[A-Za-z]{4,8}$/.test(raw)) {
-        send(ws, { type: "nameRejected", reason: "Name must be letters only (4-8 chars)." });
-        return;
-      }
-      p.name = raw;
-      send(ws, { type: "nameAccepted", name: p.name });
-      return;
-    }
+	   if (msg.type === "setName") {
+	  const raw = (msg.name ?? "").toString().trim();
+	  if (!/^[A-Za-z]{4,8}$/.test(raw)) {
+		send(ws, { type: "nameRejected", reason: "Name must be letters only (4-8 chars)." });
+		return;
+	  }
+
+	  p.name = raw;
+
+	  // Try loading from database
+	  const row = await dbLoadPlayerByName(p.name);
+	  if (row) {
+		console.log(`🔁 Loaded player from DB: ${p.name}`);
+		applyRowToPlayer(p, row);
+	  } else {
+		console.log(`🆕 New player: ${p.name}`);
+	  }
+
+	  send(ws, { type: "nameAccepted", name: p.name });
+	  return;
+	}
+
 
     if (msg.type === "input") {
       p.inputs.up = !!msg.up;
@@ -1586,16 +1695,22 @@ if (msg.type === "useItem") {
 
 });
 
-  ws.on("close", () => {
-    const pid = socketToId.get(ws);
-    socketToId.delete(ws);
-    if (pid) {
-      // If a client disconnects, end any active Skill 1 effects they own immediately.
-      cancelSkill1ForCaster(pid);
-      players.delete(pid);
-      idToSocket.delete(pid);
-    }
-  });
+	ws.on("close", async () => {
+	  const pid = socketToId.get(ws);
+	  socketToId.delete(ws);
+	  idToSocket.delete(pid);
+
+	  const p = players.get(pid);
+	  if (p) {
+		cancelSkill1ForCaster(pid);
+		await dbSavePlayer(p);  // ✅ Save state to Postgres
+		players.delete(pid);
+		console.log(`💾 Saved and removed player: ${p.name || pid}`);
+	  }
+	});
+
+	  
+	  
 });
 
 /* ======================
