@@ -314,21 +314,22 @@ function isBlocked(mapId, x, y) {
 
 /* ======================
    COLLISION
+
 ====================== */
 const PLAYER_RADIUS = 16;
 const NPC_RADIUS = 16;
 const MOB_RADIUS = 16;
 // If a mob sprite is larger (e.g. 64x64), give it a larger collision circle.
 // Tune these numbers for gameplay feel (server-authoritative).
-const MOB_RADIUS_BY_TYPE = {
-  green: 28,
-  pink: 28,
-  orange: 28,
-  purple: 28,
-  rainbow: 30,
-
-  snail_blue: 30,
-  snail_red:  30,
+const MOB_DEFS = {
+  // Keep all mob tuning in one place: stats, rewards, collision, behavior.
+  green: { radius: 28, maxHp: 50,  damage: 15, xp: 1, passiveUntilHit: true },
+  pink: { radius: 28, maxHp: 80,  damage: 20, xp: 1, passiveUntilHit: true },
+  orange: { radius: 28, maxHp: 120, damage: 20, xp: 1, passiveUntilHit: true },
+  purple: { radius: 28, maxHp: 150, damage: 25, xp: 1, passiveUntilHit: true },
+  rainbow: { radius: 28, maxHp: 300, damage: 35, xp: 1, passiveUntilHit: true },
+  snail_blue: { radius: 28, maxHp: 180, damage: 30, xp: 1, passiveUntilHit: true },
+  snail_red: { radius: 28, maxHp: 220, damage: 35, xp: 1, passiveUntilHit: true },
 };
 
 // Aggro tuning
@@ -484,6 +485,26 @@ function awardXp(player, amount) {
     }
   }
 }
+
+function killMobAndReward(m, killerId) {
+  if (!m || m.respawnIn > 0) return;
+
+  const killer = killerId ? players.get(killerId) : null;
+
+  if (killer) {
+    handleQuestProgress(killer, m);
+    awardXp(killer, m.xp ?? MOB_DEFS[m.mobType]?.xp ?? 12);
+  }
+
+  const coins = 2 + Math.floor(Math.random() * 4);
+  spawnCoins(m.mapId, m.x, m.y, coins);
+  maybeDropOrangeFlan(m);
+
+  m.deadAtMs = Date.now();
+  m.corpseUntilMs = m.deadAtMs + 2000;
+  m.respawnIn = 5;
+}
+
 
 /* ======================
    LOOT (COINS)
@@ -782,21 +803,13 @@ function randomDir() {
 /* ======================
    MOBS
 ====================== */
-const MOB_STATS = {
-  // Approx "hits to kill" assumes a baseline player atk of ~10.
-  // Damage numbers are absolute HP (player maxHp is 100), not percentages.
-  green:   { maxHp: 50,  damage: 15, passiveUntilHit: true  }, // ~5 hits, passive until attacked
-  pink:    { maxHp: 80,  damage: 20, passiveUntilHit: false }, // ~8 hits
-  orange:  { maxHp: 120, damage: 20, passiveUntilHit: false }, // ~12 hits
-  purple:  { maxHp: 150, damage: 25, passiveUntilHit: false }, // ~15 hits
-  rainbow: { maxHp: 300, damage: 35, passiveUntilHit: false }, // ~30 hits
-};
+
 
 const mobs = new Map();
 
 function spawnMob(id, mapId, opts = {}) {
   const mobType = opts.mobType || "purple"; // green | pink | orange | purple | rainbow | snail_blue | snail_red
-  const radius = opts.radius ?? MOB_RADIUS_BY_TYPE[mobType] ?? MOB_RADIUS;
+  const radius = opts.radius ?? MOB_DEFS[mobType]?.radius ?? MOB_RADIUS;
 
   // Allow explicit placement (tile coords or world coords) for curated spawns.
   let s;
@@ -816,9 +829,11 @@ function spawnMob(id, mapId, opts = {}) {
     spawnTy: Number.isFinite(opts.ty) ? opts.ty : null,
     spawnX: Number.isFinite(opts.x) ? opts.x : null,
     spawnY: Number.isFinite(opts.y) ? opts.y : null,
-    hp: opts.hp ?? (MOB_STATS[mobType]?.maxHp ?? 30),
-    maxHp: opts.maxHp ?? (opts.hp ?? (MOB_STATS[mobType]?.maxHp ?? 30)),
-    damage: opts.damage ?? (MOB_STATS[mobType]?.damage ?? 10),
+    hp: opts.hp ?? (MOB_DEFS[mobType]?.maxHp ?? 30),
+    maxHp: opts.maxHp ?? (opts.hp ?? (MOB_DEFS[mobType]?.maxHp ?? 30)),
+    damage: opts.damage ?? (MOB_DEFS[mobType]?.damage ?? 10),
+	xp: opts.xp ?? (MOB_DEFS[mobType]?.xp ?? 12),
+
 
     dirX: 0, dirY: 0,
     changeDirIn: 0,
@@ -832,7 +847,7 @@ function spawnMob(id, mapId, opts = {}) {
 
     // type + behavior
     mobType,
-    passiveUntilHit: (typeof opts.passiveUntilHit === "boolean") ? opts.passiveUntilHit : !!(MOB_STATS[mobType]?.passiveUntilHit),
+    passiveUntilHit: (typeof opts.passiveUntilHit === "boolean") ? opts.passiveUntilHit : !!(MOB_DEFS[mobType]?.passiveUntilHit),
     aggroTargetId: null,
     aggroUntil: 0,
     // Aggro tuning (can be overridden per mob type/spawn)
@@ -1227,15 +1242,7 @@ if (msg.type === "skill2DoubleStab") {
         });
 
         if (m.hp <= 0) {
-              handleQuestProgress(p, m);
-          awardXp(p, 12);
-          const coins = 2 + Math.floor(Math.random() * 4);
-          spawnCoins(m.mapId, m.x, m.y, coins);
-          maybeDropOrangeFlan(m);
-          m.deadAtMs = Date.now();
-          m.corpseUntilMs = m.deadAtMs + 2000;
-          // Keep death/respawn behavior consistent with normal attacks
-          m.respawnIn = 5;
+          killMobAndReward(m, p.id);
         }
       }
     }
@@ -1580,14 +1587,7 @@ if (hasAimDir) {
             });
 
             if (m.hp <= 0) {
-              handleQuestProgress(p, m);
-              awardXp(p, 12);
-              const coins = 2 + Math.floor(Math.random() * 4);
-              spawnCoins(m.mapId, m.x, m.y, coins);
-              maybeDropOrangeFlan(m);
-          m.deadAtMs = Date.now();
-          m.corpseUntilMs = m.deadAtMs + 2000;
-              m.respawnIn = 5;
+              killMobAndReward(m, p.id);
             }
           }
         }
@@ -1622,14 +1622,7 @@ if (hasAimDir) {
         });
 
             if (m.hp <= 0) {
-              handleQuestProgress(p, m);
-              awardXp(p, 12);
-              const coins = 2 + Math.floor(Math.random() * 4);
-              spawnCoins(m.mapId, m.x, m.y, coins);
-              maybeDropOrangeFlan(m);
-          m.deadAtMs = Date.now();
-          m.corpseUntilMs = m.deadAtMs + 2000;
-              m.respawnIn = 5;
+              killMobAndReward(m, p.id);
             }
           }
         }
@@ -1951,17 +1944,7 @@ function tickStep(dt) {
           projectiles.delete(pid);
 
           if (m.hp <= 0) {
-            // award xp / quest to projectile owner if still around
-            const owner = players.get(pr.ownerId);
-            if (owner) handleQuestProgress(owner, m);
-            if (owner) awardXp(owner, 12);
-
-            const coins = 2 + Math.floor(Math.random() * 4);
-            spawnCoins(m.mapId, m.x, m.y, coins);
-            maybeDropOrangeFlan(m);
-            m.deadAtMs = Date.now();
-            m.corpseUntilMs = m.deadAtMs + 2000;
-            m.respawnIn = 5;
+            killMobAndReward(m, pr.ownerId);
           }
           break;
         }
@@ -1972,7 +1955,7 @@ function tickStep(dt) {
     const BASE_MOB_SPEED = 120;
     // use per-mob baseAggroRange / hitAggroRange instead of a single constant
     const MOB_HIT = 36;
-    // MOB damage is per-type (see MOB_STATS). Fallback below if missing.
+    // MOB damage is per-type (see MOB_DEFS). Fallback below if missing.
     const MOB_ATK_CD = 0.9;
 
     for (const m of mobs.values()) {
