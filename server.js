@@ -4,12 +4,74 @@ import path from "path";
 import url from "url";
 import crypto from "crypto";
 import { WebSocketServer } from "ws";
+import { getMapTemplates } from "./maps_data.js";
+
+import pg from "pg";
+const { Pool } = pg;
+
+const pool = process.env.DATABASE_URL
+  ? new Pool({
+      connectionString: process.env.DATABASE_URL,
+      ssl: { rejectUnauthorized: false },
+    })
+  : null;
+
+if (pool) {
+  pool.on("error", (err) => {
+    console.error("❌ Postgres pool error:", err?.message || err);
+  });
+}
+
+
+/* ==========================================================
+   DEV / READABILITY HELPERS
+   - Toggle logging by setting: DEV.log = true
+========================================================== */
+const DEV = { log: false };
+const dlog = (...args) => { if (DEV.log) console.log(...args); };
 
 const __dirname = path.dirname(url.fileURLToPath(import.meta.url));
 
 // DEV FLAG: set to false to disable the in-game map editor network messages
 const ENABLE_MAP_EDITOR = true;
 const MAP_EDITOR_DEBUG_LOG = true; // set false to silence editor logs
+
+//SQL POSTGRES
+async function ensurePostgresSchema() {
+  if (!pool) {
+    console.log("🟦 Postgres disabled (no DATABASE_URL).");
+    return;
+  }
+
+  await pool.query(`
+    create table if not exists players (
+      name text primary key,
+      level int not null default 1,
+      xp int not null default 0,
+      xp_next int not null default 0,
+      atk int not null default 10,
+      hp int not null default 100,
+      max_hp int not null default 100,
+      map_id text not null default 'C',
+      x real not null default 0,
+      y real not null default 0,
+      gold int not null default 0,
+      equipment jsonb not null default '{}'::jsonb,
+      inventory jsonb not null default '{}'::jsonb,
+      quests jsonb not null default '{}'::jsonb,
+      updated_at timestamptz not null default now()
+    );
+  `);
+
+  await pool.query(`create index if not exists players_updated_at_idx on players(updated_at);`);
+
+  console.log("✅ Postgres schema ensured.");
+}
+
+
+
+//
+
 
 /* ======================
    HTTP FILE SERVER
@@ -73,158 +135,8 @@ function makeEmptyLayer(w, h, fill = 0) {
 }
 
 
-function makeMapA() {
-  // Map A from your editor export (25x18)
-  const w = 25, h = 18;
-
-  // Ground (legacy export): 0 = walkable, 1 = wall
-  const map = [[0,0,0,5,5,5,0,0,5,5,5,0,5,5,5,0,0,0,0,0,0,0,0,5,0],
-[0,0,5,5,0,0,0,0,0,5,5,0,5,5,0,0,0,0,0,0,0,0,5,5,5],
-[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,5,0],
-[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
-[0,5,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
-[5,5,5,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
-[0,5,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
-[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
-[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
-[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
-[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,5,5,0,0,0,0,0,0,0,0],
-[5,0,0,0,0,0,0,0,0,0,0,0,0,0,5,5,5,5,0,0,0,0,5,0,0],
-[5,0,0,0,0,5,5,5,0,0,0,0,0,0,0,0,0,0,0,0,0,0,5,0,0],
-[5,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
-[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
-[0,0,0,0,0,0,5,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
-[0,0,0,0,0,0,5,0,0,0,5,0,5,0,0,0,0,0,0,0,0,0,5,0,0],
-[0,0,0,0,0,5,5,0,0,0,5,5,5,0,0,0,0,0,0,0,0,5,5,0,0]];
-
-  // Objects: uses the same numeric IDs as your current tiles_objects.png
-  const obj = [[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,7,0,0,0,0,0,0],
-[0,0,1,0,0,0,0,0,1,0,3,0,3,0,7,0,0,0,0,1,0,0,1,0,0],
-[0,0,6,0,0,1,7,0,6,0,8,0,8,0,0,1,0,0,0,6,0,0,6,0,0],
-[0,0,0,0,0,6,0,0,0,0,3,0,3,0,0,6,0,1,0,0,0,0,0,7,0],
-[0,0,0,0,1,0,0,0,2,0,8,0,8,0,0,0,2,6,0,1,0,0,0,0,0],
-[0,0,1,0,6,0,0,1,0,0,3,0,3,0,0,1,0,0,0,6,0,0,1,0,0],
-[0,0,6,0,0,0,0,6,0,0,8,0,8,0,0,6,0,0,0,0,1,0,6,0,0],
-[0,7,0,0,1,0,0,0,0,0,3,0,3,0,0,7,0,1,0,0,6,0,0,0,0],
-[0,0,0,0,6,0,0,0,1,0,8,0,8,0,0,0,2,6,0,7,0,0,0,0,0],
-[0,0,1,0,0,0,1,0,6,0,3,0,3,0,1,0,0,0,0,0,0,0,1,0,7],
-[0,0,6,0,0,0,6,0,0,0,8,0,8,0,6,0,0,0,0,1,0,0,6,0,0],
-[0,0,0,0,1,0,0,0,1,0,3,0,3,0,0,0,1,0,0,6,0,0,0,0,0],
-[0,0,0,0,6,0,0,0,6,0,8,0,8,0,0,0,6,0,0,0,0,0,0,0,0],
-[0,0,1,0,0,0,0,0,0,0,3,0,3,0,7,0,0,0,1,0,0,0,1,0,0],
-[0,0,6,0,1,0,0,0,1,0,8,0,8,0,0,1,0,0,6,0,1,0,6,0,0],
-[0,0,0,0,6,0,0,0,6,0,0,0,0,0,0,6,0,0,0,0,6,0,0,0,0],
-[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
-[0,0,0,0,0,0,0,7,0,0,0,0,0,0,0,0,0,7,0,0,0,0,0,0,0]];
-
-  // Keep portal links unchanged (portals are defined separately from the ground/object arrays)
-  const pToC = { x: 11, y: 0,  to: "C" };  // A -> C (top portal / safe)
-  const pToB = { x: 11, y: 16, to: "B" };  // A -> B (bottom portal)
-  const pToD = { x: 0,  y: Math.floor(h / 2), to: "D" }; // A -> D (left portal: snails)
-  // Ensure portal tile stays walkable ground
-  map[pToD.y][pToD.x] = 0;
-  return { id: "A", w, h, map, obj, portals: [pToC, pToB, pToD] };
-}
-
-function makeMapB() {
-  const w = 26, h = 18;
-  const map = makeBorderMap(w, h);
-  const obj = makeEmptyLayer(w, h, 0);
-
-
-  for (let x = 3; x < w - 3; x++) map[6][x] = (x % 3 === 0) ? WALL_TILE : 0;
-  for (let y = 3; y < h - 3; y++) map[y][13] = (y % 4 === 0) ? WALL_TILE : 0;
-
-  // Portal back to A (left edge)
-  const pToA = { x: 1, y: Math.floor(h / 2), to: "A" };
-  map[pToA.y][pToA.x] = 0;
-
-  // Object layer decorations
-  const trees = [
-    { x: 4, y: 4 },
-    { x: 5, y: 4 },
-    { x: 4, y: 5 },
-    { x: 13, y: 8 },
-    { x: 16, y: 3 },
-  ];
-  for (const t of trees) {
-    if (t.y > 0) obj[t.y - 1][t.x] = 1;
-    obj[t.y][t.x] = 6;
-  }
-  obj[9][9] = 2;
-  obj[6][15] = 2;
-  return { id: "B", w, h, map, obj, portals: [pToA] };
-}
-
-function makeMapC() {
-  const w = 18, h = 12;
-  const map = [[0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 5], [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 5], [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 5], [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], [5, 5, 5, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], [5, 0, 5, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], [5, 0, 5, 5, 5, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], [5, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], [0, 5, 5, 5, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]];
-  const obj = [
-    [6, 0, 6, 0, 1, 0, 1, 7, 0, 7, 0, 1, 0, 6, 7, 0, 6, 0],
-    [0, 3, 0, 0, 6, 0, 6, 0, 0, 0, 0, 6, 0, 0, 0, 0, 0, 0],
-    [0, 8, 0, 1, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 1, 0, 0, 1],
-    [1, 0, 0, 6, 0, 1, 0, 6, 0, 0, 0, 0, 0, 0, 6, 1, 0, 6],
-    [6, 0, 0, 0, 0, 6, 0, 0, 0, 0, 1, 0, 3, 0, 0, 6, 0, 0],
-    [0, 0, 0, 1, 0, 1, 0, 0, 0, 3, 6, 7, 8, 0, 0, 0, 0, 1],
-    [1, 0, 1, 6, 0, 6, 0, 0, 7, 8, 7, 0, 0, 7, 0, 0, 0, 6],
-    [6, 0, 6, 0, 0, 0, 0, 0, 0, 7, 0, 0, 0, 0, 0, 0, 1, 0],
-    [1, 0, 1, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 6, 1],
-    [6, 0, 6, 0, 6, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 6],
-    [1, 0, 0, 0, 0, 0, 0, 0, 0, 1, 6, 1, 0, 7, 0, 6, 0, 0],
-    [6, 1, 0, 1, 0, 7, 0, 0, 1, 6, 1, 6, 1, 0, 0, 0, 0, 7]
-  ];
-
-  // Portal back to A (left edge)
-  const pToA = { x: 1, y: Math.floor(h / 2), to: "A" };
-  // Ensure the portal tile itself stays as ground (0 = grass)
-  map[pToA.y][pToA.x] = 0;
-  return { id: "C", w, h, map, obj, portals: [pToA] };
-}
-
-
-function makeMapD() {
-  // Snail map: mostly open grass with a tree perimeter
-  const w = 26, h = 18;
-  const map = makeEmptyLayer(w, h, 0); // all grass
-  const obj = makeEmptyLayer(w, h, 0);
-
-  // Perimeter trees (same object ids as other maps: canopy=1, trunk=6)
-  // Top + bottom rows
-  for (let x = 1; x < w - 1; x += 3) {
-    // top
-    obj[0][x] = 1;
-    obj[1][x] = 6;
-    // bottom
-    obj[h - 3][x] = 1;
-    obj[h - 2][x] = 6;
-  }
-  // Left + right columns
-  for (let y = 3; y < h - 2; y += 3) {
-    obj[y - 1][1] = 1;
-    obj[y][1] = 6;
-
-    obj[y - 1][w - 2] = 1;
-    obj[y][w - 2] = 6;
-  }
-
-  // A couple interior trees for flavor
-  const midTrees = [
-    { x: 8, y: 6 },
-    { x: 18, y: 11 },
-  ];
-  for (const t of midTrees) {
-    if (t.y > 0) obj[t.y - 1][t.x] = 1;
-    obj[t.y][t.x] = 6;
-  }
-
-  // Portal back to A (right edge, mid)
-  const pToA = { x: w - 1, y: Math.floor(h / 2), to: "A" };
-  map[pToA.y][pToA.x] = 0;
-  return { id: "D", w, h, map, obj, portals: [pToA] };
-}
-
-// Build map templates, then clone into a live, mutable runtime copy.
-const mapTemplates = { A: makeMapA(), B: makeMapB(), C: makeMapC(), D: makeMapD() };
+// Map templates are loaded from maps_data.js so editor exports can be copy/pasted there.
+const mapTemplates = getMapTemplates();
 
 function clone2D(grid) {
   return grid.map(row => row.slice());
@@ -322,9 +234,9 @@ const MOB_RADIUS_BY_TYPE = {
 };
 
 // Aggro tuning
-const MOB_BASE_AGGRO = 110;      // normal “notice” distance
-const MOB_HIT_AGGRO = 380;       // how far mobs will chase a player that hit them (wand-friendly)
-const MOB_HIT_AGGRO_MS = 4500;   // how long (ms) a mob stays “provoked” since last hit
+const MOB_BASE_AGGRO = 300;      // normal “notice” distance
+const MOB_HIT_AGGRO = 700;       // how far mobs will chase a player that hit them (wand-friendly)
+const MOB_HIT_AGGRO_MS = 6500;   // how long (ms) a mob stays “provoked” since last hit
 
 // When a mob is damaged, force it into a "provoked" aggro state for a while.
 // This lets ranged (wand) hits pull mobs even from outside normal aggro range.
@@ -720,11 +632,6 @@ function spawnNpc({ id, name, mapId, tx, ty, x, y, sprite }) {
   });
 }
 
-// Starting map (C): place both new NPCs
-spawnNpc({ id: "npc_crystal", name: "Crystal", mapId: "C", tx: 6, ty: 6, sprite: "npcs/npc_crystal.png" });
-spawnNpc({ id: "npc_girl",    name: "Girl",    mapId: "C", tx: 11, ty: 6, sprite: "npcs/npc_girl.png" });
-spawnNpc({ id: "npc_jangoon", name: "Jangoon", mapId: "C", tx: 12, ty: 6, sprite: "npcs/npc_jangoon.png" });
-
 
 // Starter quest: Jangoon -> kill 10 green slimes -> reward Red Duke
 function getJangoonQuest(p) {
@@ -807,6 +714,10 @@ function spawnMob(id, mapId, opts = {}) {
     id,
     mapId,
     x: s.x, y: s.y,
+    spawnTx: Number.isFinite(opts.tx) ? opts.tx : null,
+    spawnTy: Number.isFinite(opts.ty) ? opts.ty : null,
+    spawnX: Number.isFinite(opts.x) ? opts.x : null,
+    spawnY: Number.isFinite(opts.y) ? opts.y : null,
     hp: opts.hp ?? (MOB_STATS[mobType]?.maxHp ?? 30),
     maxHp: opts.maxHp ?? (opts.hp ?? (MOB_STATS[mobType]?.maxHp ?? 30)),
     damage: opts.damage ?? (MOB_STATS[mobType]?.damage ?? 10),
@@ -850,90 +761,58 @@ function spawnMob(id, mapId, opts = {}) {
 //
 // NOTE: All spawns are curated tile positions for now; tweak freely.
 
-const GREEN_SPAWNS_C = [
-  { tx: 4,  ty: 8 },
-  { tx: 6,  ty: 9 },
-  { tx: 9,  ty: 8 },
-  { tx: 12, ty: 9 },
-  { tx: 14, ty: 8 },
-  { tx: 10, ty: 5 },
-];
-GREEN_SPAWNS_C.forEach((s, i) => {
-  spawnMob(`c_green_${i + 1}`, "C", { mobType: "green", passiveUntilHit: true, tx: s.tx, ty: s.ty, aggroSpeedMul: 1.6 });
-});
 
-const PINK_SPAWNS_A = [
-  // "top" half of A
-  { tx: 6,  ty: 3 },
-  { tx: 12, ty: 2 },
-  { tx: 18, ty: 3 },
-  { tx: 9,  ty: 6 },
-  { tx: 15, ty: 6 },
-];
-PINK_SPAWNS_A.forEach((s, i) => {
-  spawnMob(`a_pink_${i + 1}`, "A", { mobType: "pink", tx: s.tx, ty: s.ty });
-});
+function initStaticEntitiesFromTemplates() {
+  // NPCs and curated mob spawns now live in maps_data.js templates.
+  // This makes the in-game editor export -> copy/paste workflow work for everything.
+  for (const [mapId, tmpl] of Object.entries(mapTemplates)) {
+    const npcList = tmpl.npcs || [];
+    for (const npc of npcList) {
+      spawnNpc({ ...npc, mapId: npc.mapId || mapId });
+    }
 
-const ORANGE_SPAWNS_A = [
-  // "bottom" half of A
-  { tx: 6,  ty: 12 },
-  { tx: 18, ty: 12 },
-  { tx: 9,  ty: 14 },
-  { tx: 15, ty: 14 },
-  { tx: 12, ty: 16 },
-];
-ORANGE_SPAWNS_A.forEach((s, i) => {
-  spawnMob(`a_orange_${i + 1}`, "A", { mobType: "orange", tx: s.tx, ty: s.ty });
-});
+    const mobList = tmpl.mobSpawns || [];
+    for (let i = 0; i < mobList.length; i++) {
+      const s = mobList[i];
+      const id = s.id || `${mapId}_${s.mobType}_${i + 1}`;
+      spawnMob(id, s.mapId || mapId, {
+        mobType: s.mobType,
+        tx: s.tx,
+        ty: s.ty,
+        x: s.x,
+        y: s.y,
+        // optional tuning knobs
+        speedMul: s.speedMul,
+        aggroSpeedMul: s.aggroSpeedMul,
+        passiveUntilHit: s.passiveUntilHit,
+      });
 
-const PURPLE_SPAWNS_B = [
-  { tx: 6,  ty: 5 },
-  { tx: 19, ty: 5 },
-  { tx: 10, ty: 12 },
-  { tx: 16, ty: 12 },
-];
-PURPLE_SPAWNS_B.forEach((s, i) => {
-  spawnMob(`b_purple_${i + 1}`, "B", { mobType: "purple", tx: s.tx, ty: s.ty });
-});
+      const m = mobs.get(id);
+      if (m) {
+        // Remember spawn point so respawn returns the mob to its curated spot.
+        if (Number.isFinite(s.tx) && Number.isFinite(s.ty)) {
+          m.spawnTx = s.tx; m.spawnTy = s.ty;
+        } else if (Number.isFinite(s.x) && Number.isFinite(s.y)) {
+          m.spawnX = s.x; m.spawnY = s.y;
+        }
+      }
+    }
+  }
+}
 
-const RAINBOW_SPAWNS_B = [
-  // fewer, tougher
-  { tx: 13, ty: 8 },
-  { tx: 13, ty: 14 },
-];
-RAINBOW_SPAWNS_B.forEach((s, i) => {
-  spawnMob(`b_rainbow_${i + 1}`, "B", { mobType: "rainbow", tx: s.tx, ty: s.ty });
-});
-const SNAIL_BLUE_SPAWNS_D = [
-  { tx: 6,  ty: 6 },
-  { tx: 12, ty: 8 },
-  { tx: 18, ty: 6 },
-];
-SNAIL_BLUE_SPAWNS_D.forEach((s, i) => {
-  spawnMob(`d_snail_blue_${i + 1}`, "D", {
-    mobType: "snail_blue",
-    tx: s.tx, ty: s.ty,
-    speedMul: 0.38,
-    aggroSpeedMul: 0.55,
-  });
-});
-
-const SNAIL_RED_SPAWNS_D = [
-  { tx: 8,  ty: 12 },
-  { tx: 16, ty: 12 },
-];
-SNAIL_RED_SPAWNS_D.forEach((s, i) => {
-  spawnMob(`d_snail_red_${i + 1}`, "D", {
-    mobType: "snail_red",
-    tx: s.tx, ty: s.ty,
-    speedMul: 0.34,
-    aggroSpeedMul: 0.5,
-  });
-});
+initStaticEntitiesFromTemplates();
 
 
 function respawnMob(m) {
-  const s = findSpawn(m.mapId, m.radius ?? MOB_RADIUS);
+  // Prefer curated spawn points (if provided in maps_data.js mobSpawns)
+  let s;
+  if (Number.isFinite(m.spawnX) && Number.isFinite(m.spawnY)) {
+    s = { x: m.spawnX, y: m.spawnY };
+  } else if (Number.isFinite(m.spawnTx) && Number.isFinite(m.spawnTy)) {
+    s = { x: (m.spawnTx + 0.5) * TILE, y: (m.spawnTy + 0.5) * TILE };
+  } else {
+    s = findSpawn(m.mapId, m.radius ?? MOB_RADIUS);
+  }
   m.x = s.x; m.y = s.y;
   m.hp = m.maxHp;
   m.respawnIn = 0;
@@ -984,7 +863,7 @@ wss.on("connection", (ws) => {
     // loot
     gold: 0,
 
-    
+
     // equipment (server authoritative)
     equipment: { weapon: null, armor: null, hat: null, accessory: null },
 
@@ -1067,8 +946,6 @@ skill2CdUntilMs: 0,
     }
 
 
-
-
 if (msg.type === "skill1Arm") {
   if (p.hp <= 0 || p.respawnIn > 0) return;
 
@@ -1132,7 +1009,7 @@ if (msg.type === "skill1Cast") {
 
   // Tell caster timings for UI
   send(ws, { type: "skill1Accepted", center: { x, y }, startMs, endMs, cdUntilMs: p.skill1CdUntilMs });
-  
+
   return;
 }
 
@@ -1357,7 +1234,6 @@ if (msg.type === "skill2DoubleStab") {
         let reason = "ok";
         if (tile < 0 || tile > EDITOR_MAX_GROUND_TILE) { ok = false; reason = "invalid_ground_tile"; }
         // Don’t allow painting the portal tile via the editor (use code for portals)
-        if (tile === PORTAL_TILE) { ok = false; reason = "portal_tile_protected"; }
 
         if (MAP_EDITOR_DEBUG_LOG) {
           console.log(`[EDITOR] ${ok ? "ACCEPT" : "REJECT"} ground @${p.mapId} (${tx},${ty}) ${currGround} -> ${tile} (${reason})`);
@@ -1452,7 +1328,7 @@ if (msg.type === "skill2DoubleStab") {
       const INTERACT_RANGE = 80;
       if (dist(p.x, p.y, npc.x, npc.y) > INTERACT_RANGE) return;
 
-      
+
       // Special NPC: Jangoon starter quest (kill 10 green slimes -> Red Duke)
       if (npcId === "npc_jangoon") {
         const q = getJangoonQuest(p);
@@ -1689,7 +1565,7 @@ if (hasAimDir) {
         return;
       }
     }
-  
+
 
 if (msg.type === "useItem") {
   const slotIndex = (msg.slot|0);
@@ -2290,6 +2166,13 @@ selfSkill2CdUntilMs: (players.get(socketToId.get(ws))?.skill2CdUntilMs) || 0,
 }, 1000 / SNAPSHOT_HZ);
 
 const PORT = process.env.PORT || 3000;
+
+try {
+  await ensurePostgresSchema();
+} catch (err) {
+  console.error("❌ Postgres schema ensure failed:", err?.message || err);
+  // process.exit(1); // optional hard fail
+}
 
 server.listen(PORT, () => {
   console.log(`🚀 Server running on port ${PORT} (TILE=${TILE}, PORTAL_TILE=${PORTAL_TILE})`);

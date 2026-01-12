@@ -14,6 +14,16 @@
   <canvas id="c" width="800" height="600"></canvas>
 
 <script>
+"use strict";
+
+/* ==========================================================
+   DEV / READABILITY HELPERS
+   - Toggle logging by running:   __DEV__.log = true
+   - Keep this OFF in production; it can be noisy.
+========================================================== */
+const __DEV__ = { log: false };
+function dlog(...args) { if (__DEV__.log) console.log(...args); }
+
 /* ======================
    CONFIG
 ====================== */
@@ -165,7 +175,6 @@ function rebuildEditorGroundTiles() {
 
   const list = [];
   for (let i = 0; i < total; i++) {
-    if (i === PORTAL_TILE) continue;
     list.push(i);
   }
   if (list.length) EDIT_GROUND_TILES = list;
@@ -201,24 +210,222 @@ function editorSetTileIndexByValue(v) {
 
 // send tile edit to server (server will validate)
 function sendEditTile(layer, tx, ty, tile) {
-  if (!ws || ws.readyState !== 1) return;
-  ws.send(JSON.stringify({ type: "editTile", layer, x: tx, y: ty, tile }));
+  wsSend({ type: "editTile", layer, x: tx, y: ty, tile });
+}
+
+function legacyCopyTextToClipboard(txt) {
+  try {
+    const ta = document.createElement("textarea");
+    ta.value = txt;
+    ta.setAttribute("readonly", "");
+    ta.style.position = "fixed";
+    ta.style.left = "-9999px";
+    ta.style.top = "0";
+    ta.style.opacity = "0";
+    document.body.appendChild(ta);
+    ta.focus();
+    ta.select();
+    const ok = document.execCommand && document.execCommand("copy");
+    document.body.removeChild(ta);
+    return !!ok;
+  } catch (e) {
+    return false;
+  }
+}
+
+function showExportOverlay(txt) {
+  let overlay = document.getElementById("mapExportOverlay");
+  if (!overlay) {
+    overlay = document.createElement("div");
+    overlay.id = "mapExportOverlay";
+    overlay.style.position = "fixed";
+    overlay.style.left = "0";
+    overlay.style.top = "0";
+    overlay.style.right = "0";
+    overlay.style.bottom = "0";
+    overlay.style.background = "rgba(0,0,0,0.55)";
+    overlay.style.zIndex = "999999";
+    overlay.style.display = "none";
+    overlay.style.alignItems = "center";
+    overlay.style.justifyContent = "center";
+    overlay.style.padding = "18px";
+
+    const panel = document.createElement("div");
+    panel.style.width = "min(980px, 92vw)";
+    panel.style.maxHeight = "86vh";
+    panel.style.background = "rgba(20,20,24,0.98)";
+    panel.style.border = "1px solid rgba(255,255,255,0.12)";
+    panel.style.borderRadius = "12px";
+    panel.style.boxShadow = "0 12px 40px rgba(0,0,0,0.45)";
+    panel.style.padding = "14px";
+    panel.style.display = "flex";
+    panel.style.flexDirection = "column";
+    panel.style.gap = "10px";
+    panel.style.color = "#fff";
+    panel.style.fontFamily = "system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif";
+
+    const title = document.createElement("div");
+    title.textContent = "Map Export";
+    title.style.fontSize = "18px";
+    title.style.fontWeight = "700";
+
+    const tip = document.createElement("div");
+    tip.textContent = "Clipboard is blocked in this context. The export is shown below — click inside, then press Ctrl+C to copy.";
+    tip.style.fontSize = "13px";
+    tip.style.opacity = "0.85";
+
+    const ta = document.createElement("textarea");
+    ta.id = "mapExportText";
+    ta.spellcheck = false;
+    ta.wrap = "off";
+    ta.style.width = "100%";
+    ta.style.height = "60vh";
+    ta.style.resize = "vertical";
+    ta.style.background = "rgba(0,0,0,0.35)";
+    ta.style.color = "#fff";
+    ta.style.border = "1px solid rgba(255,255,255,0.18)";
+    ta.style.borderRadius = "10px";
+    ta.style.padding = "10px";
+    ta.style.fontFamily = "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace";
+    ta.style.fontSize = "12px";
+    ta.style.lineHeight = "1.35";
+
+    const row = document.createElement("div");
+    row.style.display = "flex";
+    row.style.gap = "10px";
+    row.style.justifyContent = "flex-end";
+
+    const btnCopy = document.createElement("button");
+    btnCopy.textContent = "Try Copy Again";
+    btnCopy.style.padding = "8px 12px";
+    btnCopy.style.borderRadius = "10px";
+    btnCopy.style.border = "1px solid rgba(255,255,255,0.22)";
+    btnCopy.style.background = "rgba(255,255,255,0.08)";
+    btnCopy.style.color = "#fff";
+    btnCopy.style.cursor = "pointer";
+
+    const btnClose = document.createElement("button");
+    btnClose.textContent = "Close";
+    btnClose.style.padding = "8px 12px";
+    btnClose.style.borderRadius = "10px";
+    btnClose.style.border = "1px solid rgba(255,255,255,0.22)";
+    btnClose.style.background = "rgba(255,255,255,0.08)";
+    btnClose.style.color = "#fff";
+    btnClose.style.cursor = "pointer";
+
+    btnClose.onclick = () => { overlay.style.display = "none"; };
+    overlay.onclick = (e) => { if (e.target === overlay) overlay.style.display = "none"; };
+
+    btnCopy.onclick = async () => {
+      const t = document.getElementById("mapExportText")?.value ?? "";
+      let ok = false;
+      try {
+        if (navigator.clipboard && window.isSecureContext) {
+          await navigator.clipboard.writeText(t);
+          ok = true;
+        }
+      } catch {}
+      if (!ok) ok = legacyCopyTextToClipboard(t);
+      levelToastText = ok ? "Export copied to clipboard" : "Copy still blocked — use Ctrl+C";
+      levelToastUntilMs = performance.now() + 2500;
+      if (ok) overlay.style.display = "none";
+    };
+
+    row.appendChild(btnCopy);
+    row.appendChild(btnClose);
+
+    panel.appendChild(title);
+    panel.appendChild(tip);
+    panel.appendChild(ta);
+    panel.appendChild(row);
+
+    overlay.appendChild(panel);
+    document.body.appendChild(overlay);
+  }
+
+  const ta = document.getElementById("mapExportText");
+  if (ta) ta.value = txt;
+
+  overlay.style.display = "flex";
+  setTimeout(() => {
+    const t = document.getElementById("mapExportText");
+    if (t) {
+      t.focus();
+      t.select();
+    }
+  }, 0);
 }
 
 async function exportCurrentMapToClipboard() {
   if (!map) return;
+
+  // Use whatever your client already tracks as the "current map id"
+  // If yours is named differently, swap this line only.
+  const id = (typeof currentMapId !== "undefined") ? currentMapId
+           : (typeof currentMap !== "undefined" && currentMap?.id != null) ? currentMap.id
+           : 1;
+
+  // If your maps are numeric (1/2/3/4), this makes makeMapA/B/C/D automatically.
+  // If your ids are strings (like "mapA"), see note below.
+  const letter = (typeof id === "number" && id >= 1 && id <= 26)
+    ? String.fromCharCode(64 + id)
+    : String(id);
+
+  const fnName = `makeMap${letter}`;
+
+  const w = map?.[0]?.length || 0;
+  const h = map?.length || 0;
+
+  const ground = map;
+  const objects = objMap || Array.from({ length: h }, () => Array(w).fill(0));
+
+  // If your client has portals synced, include them; otherwise export empty list
+  const portalList = (typeof portals !== "undefined" && Array.isArray(portals)) ? portals : [];
+
   const payload =
-`// Ground (map)\nconst map_tiles = ${JSON.stringify(map)};\n\n// Objects (objMap)\nconst map_objects = ${JSON.stringify(objMap || [])};\n`;
-  console.log(payload);
-  try {
-    await navigator.clipboard.writeText(payload);
-    levelToastText = "Exported map to clipboard (also logged to console)";
-    levelToastUntilMs = performance.now() + 2500;
-  } catch {
-    levelToastText = "Map printed to console (clipboard blocked)";
-    levelToastUntilMs = performance.now() + 2500;
-  }
+`// Paste into maps_data.js
+export function ${fnName}() {
+  const w = ${w};
+  const h = ${h};
+
+  const map = ${JSON.stringify(ground)};
+  const obj = ${JSON.stringify(objects)};
+
+  const portals = ${JSON.stringify(portalList, null, 2)};
+
+  return { id: ${JSON.stringify(id)}, w, h, map, obj, portals };
 }
+`;
+
+  console.log(payload);
+
+  let copied = false;
+try {
+  // Modern API (works on https / localhost with permission)
+  if (navigator.clipboard && (window.isSecureContext || location.hostname === "localhost")) {
+    await navigator.clipboard.writeText(payload);
+    copied = true;
+  }
+} catch (err) {
+  copied = false;
+}
+
+// Fallback for http / blocked clipboard contexts
+if (!copied) copied = legacyCopyTextToClipboard(payload);
+
+if (copied) {
+  levelToastText = "Exported makeMap() to clipboard (also logged to console)";
+  levelToastUntilMs = performance.now() + 2500;
+} else {
+  console.warn("Clipboard blocked — showing export overlay");
+  levelToastText = "Clipboard blocked — showing export box";
+  levelToastUntilMs = performance.now() + 2500;
+  showExportOverlay(payload);
+}
+}
+
+
+
 let invUI = null; // cached inventory UI layout for click handling
 
 // Inventory window (draggable)
@@ -676,6 +883,16 @@ function drawFadeOverlay() {
 const wsProto = (location.protocol === "https:") ? "wss" : "ws";
 const ws = new WebSocket(`${wsProto}://${location.host}`);
 
+function wsSend(obj) {
+  if (!ws || ws.readyState !== 1) return false;
+  try {
+    ws.send(JSON.stringify(obj));
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 // --- Server clock sync (Render can be ~0-2s ahead/behind your PC clock).
 // Server timestamps (startMs/endMs/cooldowns) are serverNowMs()-based epoch ms.
 // We estimate the offset so visuals/cooldowns line up instantly everywhere.
@@ -699,7 +916,7 @@ function promptForName() {
       }
       break;
     }
-    alert("Name must be letters only, 4-6 characters.");
+    alert("Name must be letters only, 4-8 characters.");
   }
 }
 
@@ -1159,23 +1376,28 @@ function dirFromVector(dx, dy) {
   return dy >= 0 ? DIR.DOWN : DIR.UP;
 }
 
-function sendAttackAtWorld(wx, wy, mx = null, my = null, extra = null) {
+function calcAimFromWorld(wx, wy, mx = null, my = null) {
   const me = getMyPos();
-  if (!me) return;
-
+  if (!me) return null;
   // Derive aim direction from screen-space (mouse relative to the player's rendered position).
   // This avoids "opposite direction" when camera smoothing lags behind the server position.
   let dx = wx - me.x;
   let dy = wy - me.y;
-
   if (mx != null && my != null) {
     const px = (me.x - camX);
     const py = (me.y - camY);
     dx = mx - px;
     dy = my - py;
   }
+  const dir = dirFromVector(dx, dy);
+  const len = Math.hypot(dx, dy) || 1;
+  return { me, dx, dy, dir, aimDirX: dx / len, aimDirY: dy / len };
+}
 
-  const d = dirFromVector(dx, dy);
+function sendAttackAtWorld(wx, wy, mx = null, my = null, extra = null) {
+  const aim = calcAimFromWorld(wx, wy, mx, my);
+  if (!aim) return;
+  const { me, dir: d, aimDirX, aimDirY } = aim;
 
   // drive local attack animation direction immediately
   if (d != null) {
@@ -1185,16 +1407,10 @@ function sendAttackAtWorld(wx, wy, mx = null, my = null, extra = null) {
     st.dir = d;
   }
 
-  // normalized aim direction for the server (independent of camera lag)
-  const len = Math.hypot(dx, dy) || 1;
-  const aimDirX = dx / len;
-  const aimDirY = dy / len;
   // Do not play local swing instantly; wait for server snapshot (p.atkAnim) so cooldown-rejected attacks don't animate.
-  if (ws.readyState === 1) {
-    const payload = { type: "attack", aimX: wx, aimY: wy, aimDirX, aimDirY };
-    if (extra && typeof extra === "object") Object.assign(payload, extra);
-    ws.send(JSON.stringify(payload));
-  }
+  const payload = { type: "attack", aimX: wx, aimY: wy, aimDirX, aimDirY };
+  if (extra && typeof extra === "object") Object.assign(payload, extra);
+  wsSend(payload);
 }
 
 function sendAttack() {
@@ -3027,7 +3243,6 @@ const ITEM_INFO = {
   charger_suit:    { name: "Charger Suit",    desc: "Sturdy armor with a metallic sheen." },
   cloth_hat:       { name: "Cloth Hat",       desc: "Keeps the sun out of your eyes." },
   charger_helmet:  { name: "Charger Helmet",  desc: "A helmet with a solid visor." },
-  red_duke: { equipType: "Hat" },
   red_duke: { name: "Red Duke", type: "hat", stats: "", desc: "A duke’s helm, dyed crimson." },
   lucky_charm:     { name: "Lucky Charm",     desc: "Maybe it really is lucky." },
 };
