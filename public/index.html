@@ -6,12 +6,91 @@
   <style>
     body { background:#222; color:#ddd; font-family: system-ui, sans-serif; }
     canvas { border: 1px solid #555; image-rendering: pixelated; }
+  
+/* --- HUD button (hamburger inventory) --- */
+.game-wrap { position: relative; display: inline-block; }
+.hud-btn {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  width: 38px;
+  height: 38px;
+  border-radius: 12px;
+  background: rgba(0,0,0,0.55);
+  border: 1px solid rgba(255,255,255,0.18);
+  color: #fff;
+  font-size: 22px;
+  line-height: 1;
+  cursor: pointer;
+  user-select: none;
+  -webkit-user-select: none;
+  touch-action: manipulation;
+}
+.hud-btn:hover { background: rgba(0,0,0,0.70); }
+.hud-btn:active { transform: translateY(1px); }
+.hud-btn:focus { outline: 2px solid rgba(255,255,255,0.35); outline-offset: 2px; }
+
+  
+/* --- Main menu dropdown (hamburger) --- */
+.main-menu {
+  position: absolute;
+  top: 54px;          /* below the ☰ button */
+  right: 10px;
+  min-width: 160px;
+  padding: 8px;
+  border-radius: 14px;
+  background: rgba(0,0,0,0.72);
+  border: 1px solid rgba(255,255,255,0.16);
+  box-shadow: 0 10px 26px rgba(0,0,0,0.35);
+  display: none;
+  z-index: 30;
+}
+.main-menu.open { display: block; }
+.main-menu-item {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 10px;
+  margin: 0;
+  border: 0;
+  border-radius: 12px;
+  background: rgba(255,255,255,0.06);
+  color: #fff;
+  font-size: 14px;
+  cursor: pointer;
+  user-select: none;
+}
+.main-menu-item + .main-menu-item { margin-top: 6px; }
+.main-menu-item:hover { background: rgba(255,255,255,0.10); }
+.main-menu-item:active { transform: translateY(1px); }
+.main-menu-item:focus { outline: 2px solid rgba(255,255,255,0.28); outline-offset: 2px; }
+.main-menu-item .hint {
+  font-size: 12px;
+  opacity: 0.75;
+}
+.main-menu-item.disabled,
+.main-menu-item:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
   </style>
 </head>
 <body>
   <h1>Mini MMO</h1>
-  <p>WASD / Arrow keys • Press <b>E</b> near NPC / portal • Left-click to attack • Press <b>I</b> for inventory</p>
-  <canvas id="c" width="800" height="600"></canvas>
+  <p>WASD / Arrow keys • Press <b>E</b> near NPC / portal • Left-click to attack • Press <b>I</b> (or ☰) for inventory • Press <b>K</b> for skills</p>
+  <div id="gameWrap" class="game-wrap">
+    <button id="invBtn" class="hud-btn" type="button" aria-label="Open inventory (I)" aria-expanded="false">☰</button>
+    <div id="mainMenu" class="main-menu" role="menu" aria-label="Game menu">
+      <button class="main-menu-item" type="button" data-action="items" role="menuitem">Items <span class="hint">I</span></button>
+      <button class="main-menu-item" type="button" data-action="skills" role="menuitem">Skills <span class="hint">K</span></button>
+      <button class="main-menu-item disabled" type="button" data-action="quests" role="menuitem" aria-disabled="true" disabled>Quests <span class="hint">Soon</span></button>
+      <button class="main-menu-item disabled" type="button" data-action="settings" role="menuitem" aria-disabled="true" disabled>Settings <span class="hint">Soon</span></button>
+    </div>
+    <canvas id="c" width="800" height="600"></canvas>
+  </div>
 
 <script>
 "use strict";
@@ -138,7 +217,435 @@ const ATTACK_DELAY_MS = 300; // local input throttle (server also enforces)
 let nextAttackAtMs = 0; // local send throttle (server also enforces)
 
 
-let inventoryOpen = false; // I key toggles inventory UI
+let inventoryOpen = false;
+let skillsOpen = false;
+
+// ======================
+// HOTBAR (1–6)
+// - Press 1..6 to use a bound skill/item (initially: 1=Skill1, 2=Skill2)
+// - (Optional binding now) Ctrl+1..6 while hovering an inventory item binds that item
+// ======================
+const HOTBAR_SIZE = 6;
+
+// Client-side hint for "consumable" items (used for inventory submenu + hotbar binding UI).
+// Keep this list in sync with server.js ITEMS that have an onUse().
+const CONSUMABLE_ITEM_IDS = new Set([
+  "potion_small",
+  "potion_green",
+  "potion_purple",
+]);
+
+function isConsumableItemId(itemId) {
+  if (!itemId) return false;
+  return CONSUMABLE_ITEM_IDS.has(itemId) || itemId.startsWith("potion_");
+}
+
+let hotbarSlots = [
+  { type: "skill", id: "skill1" },
+  { type: "skill", id: "skill2" },
+  null, null, null, null,
+];
+
+// Quick visual feedback when a hotbar slot is successfully used
+const HOTBAR_FLASH_MS = 140;
+const hotbarFlashUntilMs = new Array(HOTBAR_SIZE).fill(0);
+
+function triggerHotbarFlashByIndex(idx) {
+  if (idx < 0 || idx >= HOTBAR_SIZE) return;
+  hotbarFlashUntilMs[idx] = performance.now() + HOTBAR_FLASH_MS;
+}
+
+
+function hotbarToast(msg, ms = 1400) {
+  // Uses your existing toast if present; otherwise falls back to console
+  if (typeof levelToastText !== "undefined" && typeof levelToastUntilMs !== "undefined") {
+    levelToastText = msg;
+    levelToastUntilMs = performance.now() + ms;
+  } else {
+    console.log("[hotbar]", msg);
+  }
+}
+
+function resolveInventorySlotIndex(itemId, preferred) {
+  const me = (typeof worldPlayers !== "undefined" && typeof myId !== "undefined") ? worldPlayers?.[myId] : null;
+  const slots = me?.inventory?.slots;
+  if (!slots) return -1;
+
+  if (preferred != null && preferred >= 0 && preferred < slots.length) {
+    const s = slots[preferred];
+    if (s && s.id === itemId) return preferred;
+  }
+  for (let i = 0; i < slots.length; i++) {
+    const s = slots[i];
+    if (s && s.id === itemId) return i;
+  }
+  return -1;
+}
+
+function activateSkillById(skillId) {
+  // Skill1: your existing wand skill (arms the next shot)
+  if (skillId === "skill1") {
+    // If you already have a dedicated function, prefer it
+    if (typeof activateSkill1 === "function") { activateSkill1(); return true; }
+
+    // Minimal safe implementation using your existing variables/functions
+    const nowAbs = (typeof serverNowMs === "function") ? serverNowMs() : Date.now();
+
+    if (typeof skill1ActiveUntilMs !== "undefined" && nowAbs < skill1ActiveUntilMs) {
+      if (typeof triggerSkill1HotbarNack === "function") triggerSkill1HotbarNack();
+      return false;
+    }
+    if (typeof skill1CdUntilMs !== "undefined" && nowAbs < skill1CdUntilMs) {
+      if (typeof triggerSkill1HotbarNack === "function") triggerSkill1HotbarNack();
+      return false;
+    }
+
+    // Match the old click-to-cast behavior: Skill 1 requires a wand equipped
+    const me = (typeof worldPlayers !== "undefined" && typeof myId !== "undefined")
+      ? worldPlayers?.[myId]
+      : null;
+    const weaponKey = me?.weapon || null;
+    if (weaponKey !== "wand") {
+      if (typeof levelToastText !== "undefined" && typeof levelToastUntilMs !== "undefined") {
+        levelToastText = "Equip a wand to use Skill 1";
+        levelToastUntilMs = performance.now() + 1500;
+      } else {
+        hotbarToast("Equip a wand to use Skill 1");
+      }
+      return false;
+    }
+
+    // Aim at the last mouse position (no click required). If we don't have a mouse yet, fire forward.
+    let wx = null, wy = null, mx = null, my = null;
+    if (typeof lastAim !== "undefined" && lastAim && lastAim.has) {
+      wx = lastAim.wx; wy = lastAim.wy; mx = lastAim.mx; my = lastAim.my;
+    } else {
+      const px = me?.x ?? 0;
+      const py = me?.y ?? 0;
+      const fx = me?.facing?.x ?? 0;
+      const fy = me?.facing?.y ?? 1;
+      const len = Math.hypot(fx, fy) || 1;
+      const dirx = fx / len, diry = fy / len;
+      const range = 220;
+      wx = px + dirx * range;
+      wy = py + diry * range;
+    }
+
+    // Arm + immediately fire (no extra click)
+    if (typeof sendSkill1Arm === "function") sendSkill1Arm();
+    if (typeof sendAttackAtWorld === "function") {
+      sendAttackAtWorld(wx, wy, mx, my, { skill1: true });
+    } else {
+      hotbarToast("Skill1 not available (sendAttackAtWorld missing)");
+      return false;
+    }
+
+    // Ensure we don't leave a primed state hanging around
+    if (typeof skill1Primed !== "undefined") skill1Primed = false;
+    if (typeof skill1PrimedUntilMs !== "undefined") skill1PrimedUntilMs = 0;
+
+    return true;
+  }
+
+  // Skill2: your spear double-stab
+  if (skillId === "skill2") {
+    if (typeof activateSkill2 === "function") { activateSkill2(); return true; }
+
+    const nowAbs = (typeof serverNowMs === "function") ? serverNowMs() : Date.now();
+    if (typeof skill2ActiveUntilMs !== "undefined" && nowAbs < skill2ActiveUntilMs) {
+      if (typeof triggerSkill2HotbarNack === "function") triggerSkill2HotbarNack();
+      return false;
+    }
+    if (typeof skill2CdUntilMs !== "undefined" && nowAbs < skill2CdUntilMs) {
+      if (typeof triggerSkill2HotbarNack === "function") triggerSkill2HotbarNack();
+      return false;
+    }
+
+    if (typeof sendSkill2DoubleStabAtWorld === "function" && typeof lastAim !== "undefined" && lastAim?.has) {
+      sendSkill2DoubleStabAtWorld(lastAim.wx, lastAim.wy, lastAim.mx, lastAim.my);
+      return true;
+    }
+    if (typeof sendSkill2DoubleStab === "function") {
+      sendSkill2DoubleStab();
+      return true;
+    }
+    hotbarToast("Skill2 not available (sendSkill2DoubleStab missing)");
+    return false;
+  }
+
+  hotbarToast(`Unknown skill: ${skillId}`);
+  return false;
+}
+
+function useHotbarSlot(n1) {
+  const idx = n1 - 1;
+  if (idx < 0 || idx >= HOTBAR_SIZE) return;
+
+  const slot = hotbarSlots[idx];
+  if (!slot) {
+    hotbarToast(`Hotbar ${n1}: empty`);
+    return;
+  }
+
+  if (slot.type === "skill") {
+    const ok = activateSkillById(slot.id);
+    if (ok) triggerHotbarFlashByIndex(idx);
+    return;
+  }
+
+  if (slot.type === "item") {
+    const si = resolveInventorySlotIndex(slot.itemId, slot.preferSlot);
+    if (si < 0) {
+      hotbarToast(`Hotbar ${n1}: item not found`);
+      return;
+    }
+    if (typeof sendInvClick === "function") {
+      sendInvClick(si);
+      triggerHotbarFlashByIndex(idx);
+    } else {
+      hotbarToast("Item use not available (sendInvClick missing)");
+    }
+    return;
+  }
+
+  hotbarToast(`Hotbar ${n1}: invalid`);
+}
+
+function bindHotbarItem(n1, itemId, preferSlot) {
+  const idx = n1 - 1;
+  if (idx < 0 || idx >= HOTBAR_SIZE) return;
+  hotbarSlots[idx] = { type: "item", itemId, preferSlot };
+  hotbarToast(`Bound ${n1} → item`);
+}
+
+function bindHotbarSkill(n1, skillId) {
+  const idx = n1 - 1;
+  if (idx < 0 || idx >= HOTBAR_SIZE) return;
+  hotbarSlots[idx] = { type: "skill", id: skillId };
+  hotbarToast(`Bound ${n1} → ${skillId}`);
+}
+
+function hotbarKeyForSkill(skillId) {
+  for (let i = 0; i < HOTBAR_SIZE; i++) {
+    const s = hotbarSlots[i];
+    if (s && s.type === "skill" && s.id === skillId) return String(i + 1);
+  }
+  return "";
+}
+
+// When binding from the Skills menu, we enter a "press 1–6" capture mode.
+let pendingSkillBind = null; // { skillId }
+let pendingItemBind = null; // { itemId, preferSlot }
+
+
+// Draw a simple hotbar at the bottom (text-only labels for now)
+function drawHotbar() {
+  if (typeof ctx === "undefined" || typeof canvas === "undefined") return;
+
+  const box = 44, gap = 6;
+  const totalW = HOTBAR_SIZE * box + (HOTBAR_SIZE - 1) * gap;
+  const x0 = Math.round(canvas.width / 2 - totalW / 2);
+  const y0 = Math.round(canvas.height - box - 12);
+
+  const me = (typeof worldPlayers !== "undefined" && typeof myId !== "undefined")
+    ? worldPlayers?.[myId]
+    : null;
+  const invSlots = me?.inventory?.slots || [];
+
+  const nowUiMs = performance.now();
+  const nowAbs = (typeof serverNowMs === "function") ? serverNowMs() : Date.now();
+
+  ctx.save();
+
+  // slot visuals
+  for (let i = 0; i < HOTBAR_SIZE; i++) {
+    const x = x0 + i * (box + gap);
+    const y = y0;
+
+    // background box
+    ctx.fillStyle = "rgba(0,0,0,0.50)";
+    ctx.fillRect(x, y, box, box);
+    ctx.strokeStyle = "rgba(255,255,255,0.20)";
+    ctx.strokeRect(x + 0.5, y + 0.5, box - 1, box - 1);
+
+    const slot = hotbarSlots[i];
+
+    // Draw icon if assigned
+    let drewIcon = false;
+
+    if (slot && slot.type === "skill") {
+      const iconImg = hotbarSkillIcons?.[slot.id] || null;
+      if (iconImg && iconImg.complete && iconImg.naturalWidth > 0) {
+        const ICON = 30;
+        const ix = Math.round(x + (box - ICON) / 2);
+        const iy = Math.round(y + (box - ICON) / 2);
+        ctx.drawImage(iconImg, ix, iy, ICON, ICON);
+        drewIcon = true;
+      }
+    } else if (slot && slot.type === "item") {
+      const si = resolveInventorySlotIndex(slot.itemId, slot.preferSlot);
+      const it = (si >= 0) ? invSlots[si] : null;
+      const qty = Number(it?.qty || 0);
+      const outOfStock = (si < 0) || (qty <= 0);
+
+      const itemId = it?.id || slot.itemId;
+      const img = getItemIconImage(itemId);
+
+      // icon (dim if out of stock)
+      if (img && img.complete && img.naturalWidth > 0) {
+        const ICON = 30;
+        const ix = Math.round(x + (box - ICON) / 2);
+        const iy = Math.round(y + (box - ICON) / 2);
+        ctx.save();
+        if (outOfStock) ctx.globalAlpha = 0.35;
+        ctx.drawImage(img, ix, iy, ICON, ICON);
+        ctx.restore();
+        drewIcon = true;
+      } else {
+        // fallback label if icon missing
+        ctx.save();
+        ctx.fillStyle = outOfStock ? "rgba(255,255,255,0.35)" : "rgba(255,255,255,0.85)";
+        ctx.font = "11px system-ui, sans-serif";
+        ctx.textAlign = "center";
+        ctx.textBaseline = "middle";
+        ctx.fillText("Item", x + box / 2, y + box / 2);
+        ctx.restore();
+      }
+
+      // stack count (consumables) — only when we actually have stock > 1
+      if (!outOfStock && qty > 1) {
+        ctx.save();
+        const txt = `x${qty}`;
+        ctx.font = "12px system-ui, sans-serif";
+        ctx.textAlign = "right";
+        ctx.textBaseline = "bottom";
+        const tx = x + box - 4;
+        const ty = y + box - 3;
+        ctx.lineWidth = 3;
+        ctx.strokeStyle = "rgba(0,0,0,0.80)";
+        ctx.strokeText(txt, tx, ty);
+        ctx.fillStyle = "rgba(255,255,255,0.95)";
+        ctx.fillText(txt, tx, ty);
+        ctx.restore();
+      }
+
+      // out-of-stock indicator (hotkeyed, but none in inventory)
+      if (outOfStock) {
+        ctx.save();
+        // subtle dark veil
+        ctx.fillStyle = "rgba(0,0,0,0.40)";
+        ctx.fillRect(x + 2, y + 2, box - 4, box - 4);
+
+        // "0" in corner
+        ctx.font = "12px system-ui, sans-serif";
+        ctx.textAlign = "right";
+        ctx.textBaseline = "bottom";
+        const tx = x + box - 4;
+        const ty = y + box - 3;
+        ctx.lineWidth = 3;
+        ctx.strokeStyle = "rgba(0,0,0,0.85)";
+        ctx.strokeText("0", tx, ty);
+        ctx.fillStyle = "rgba(255,150,150,0.98)";
+        ctx.fillText("0", tx, ty);
+        ctx.restore();
+      }
+    }
+
+
+    // Cooldown overlay (skills)
+    if (slot && slot.type === "skill") {
+      let lockUntil = 0;
+      let totalMs = 0;
+
+      if (slot.id === "skill1") {
+        // skill1 has an "active" window and a cooldown window; either blocks re-use
+        if (typeof skill1ActiveUntilMs === "number" && nowAbs < skill1ActiveUntilMs) {
+          lockUntil = Math.max(lockUntil, skill1ActiveUntilMs);
+          totalMs = Math.max(totalMs, Number(skill1ActiveTotalMs || 0));
+        }
+        if (typeof skill1CdUntilMs === "number" && nowAbs < skill1CdUntilMs) {
+          lockUntil = Math.max(lockUntil, skill1CdUntilMs);
+          totalMs = Math.max(totalMs, Number(skill1CdTotalMs || 0));
+        }
+      } else if (slot.id === "skill2") {
+        if (typeof skill2CdUntilMs === "number" && nowAbs < skill2CdUntilMs) {
+          lockUntil = Math.max(lockUntil, skill2CdUntilMs);
+          totalMs = Math.max(totalMs, Number(skill2CdTotalMs || 0));
+        }
+      }
+
+      const remainMs = Math.max(0, lockUntil - nowAbs);
+
+      if (remainMs > 0) {
+        const pct = (totalMs > 0) ? Math.max(0, Math.min(1, remainMs / totalMs)) : 1;
+
+        // darken the whole slot a bit
+        ctx.fillStyle = "rgba(0,0,0,0.35)";
+        ctx.fillRect(x, y, box, box);
+
+        // thicker fill from bottom indicating time remaining
+        const h = Math.max(0, Math.min(box, Math.ceil(box * pct)));
+        ctx.fillStyle = "rgba(0,0,0,0.55)";
+        ctx.fillRect(x, y + (box - h), box, h);
+
+        // remaining time text
+        const sec = remainMs / 1000;
+        const txt = (sec < 10) ? sec.toFixed(1) : String(Math.ceil(sec));
+        ctx.save();
+        ctx.font = "12px system-ui, sans-serif";
+        ctx.textAlign = "center";
+        ctx.textBaseline = "middle";
+        ctx.lineWidth = 3;
+        ctx.strokeStyle = "rgba(0,0,0,0.85)";
+        ctx.strokeText(txt, x + box / 2, y + box / 2);
+        ctx.fillStyle = "rgba(255,255,255,0.95)";
+        ctx.fillText(txt, x + box / 2, y + box / 2);
+        ctx.restore();
+      }
+    }
+
+    // Hotbar "used" flash feedback
+    const flashRemain = (hotbarFlashUntilMs[i] || 0) - nowUiMs;
+    if (flashRemain > 0) {
+      const a = Math.max(0, Math.min(1, flashRemain / HOTBAR_FLASH_MS));
+      ctx.fillStyle = `rgba(255,255,255,${(0.55 * a).toFixed(3)})`;
+      ctx.fillRect(x, y, box, box);
+    }
+
+    // Key label (always)
+    ctx.font = "11px system-ui, sans-serif";
+    ctx.textAlign = "left";
+    ctx.textBaseline = "top";
+    ctx.fillStyle = "rgba(255,255,255,0.85)";
+    ctx.fillText(String(i + 1), x + 4, y + 3);
+
+    // If empty or no icon available, show a subtle placeholder
+    if (!slot || !drewIcon) {
+      ctx.font = "10px system-ui, sans-serif";
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      ctx.fillStyle = slot ? "rgba(255,255,255,0.55)" : "rgba(255,255,255,0.25)";
+
+      let label = "";
+      if (slot?.type === "skill") label = (slot.id || "Skill");
+      else if (slot?.type === "item") label = "Item";
+
+      if (label) {
+        if (label.length > 8) label = label.slice(0, 8) + "…";
+        ctx.fillText(label, x + box / 2, y + box / 2 + 9);
+      } else {
+        ctx.fillText("—", x + box / 2, y + box / 2 + 9);
+      }
+    }
+  }
+
+  ctx.restore();
+}
+
+
+let skillsTab = "wand";
+    // (button controls main menu, not inventory)
+ // I key toggles inventory UI
 
 /* ======================
    DEBUG MAP EDITOR
@@ -439,11 +946,32 @@ let invDragOffY = 0;
 let invCloseRect = null;
 let invHeaderRect = null;
 
+// Skills window (draggable)
+let skillsUI = null; // cached skills UI layout for click handling
+let skillsWinX = null;
+let skillsWinY = null;
+let skillsWinW = 0;
+let skillsWinH = 0;
+let skillsDragging = false;
+let skillsDragOffX = 0;
+let skillsDragOffY = 0;
+let skillsCloseRect = null;
+let skillsHeaderRect = null;
+let skillsTabRects = null; // {sword:{...}, spear:{...}, wand:{...}}
+let skillsItemRects = null; // [{id, rect}, ...]
+
+
 // Mouse position in screen-space (for inventory hover tooltips)
 let uiMouse = { mx: 0, my: 0, has: false };
 let invHover = null; // { id, qty, source, rect }
+let invItemMenu = null; // { x, y, slotIndex, itemId }
+let invItemMenuUI = null; // { panel, btnUse, btnBind }
 
 function clamp(v, a, b) { return Math.max(a, Math.min(b, v)); }
+
+function rectHit(r, mx, my) {
+  return !!r && mx >= r.x && mx <= r.x + r.w && my >= r.y && my <= r.y + r.h;
+}
 function lerp(a, b, t) { return a + (b - a) * t; }
 function easeInOut(t) { return t * t * (3 - 2 * t); }
 function dist(ax, ay, bx, by) { return Math.hypot(ax - bx, ay - by); }
@@ -480,6 +1008,19 @@ const skill1IconImg = new Image();
 skill1IconImg.src = "/assets/skills/icons/icon_skill_blackhole.png";
 const skill2IconImg = new Image();
 skill2IconImg.src = "/assets/skills/icons/icon_skill_double_stab.png";
+
+// Hotbar icon lookup for skills
+const hotbarSkillIcons = {
+  skill1: skill1IconImg,
+  skill2: skill2IconImg,
+};
+
+function getItemIconImage(itemId) {
+  // Prefer inventory/equipment icons; fall back to drop sprites if needed
+  return (typeof equipIcons !== "undefined" && equipIcons[itemId]) ? equipIcons[itemId]
+       : (typeof itemSprites !== "undefined" && itemSprites[itemId]) ? itemSprites[itemId]
+       : null;
+}
 
 // In case the image is already cached/complete
 setTimeout(rebuildEditorObjectTiles, 0);
@@ -784,6 +1325,162 @@ hatIdleOverlays.red_duke.src = "/assets/equipment/overlays/overlay_idle_red_duke
    CANVAS
 ====================== */
 const canvas = document.getElementById("c");
+
+// Hamburger menu button (opens inventory) — keeps 'I' hotkey too.
+var invBtn = document.getElementById("invBtn");
+
+// --- Main (hamburger) menu state ---
+let mainMenuOpen = false;
+let mainMenu = document.getElementById("mainMenu");
+
+function updateMenuBtnState() {
+  if (!invBtn) invBtn = document.getElementById("invBtn");
+  if (!invBtn) return;
+  invBtn.setAttribute("aria-expanded", mainMenuOpen ? "true" : "false");
+}
+
+function setMainMenuOpen(open) {
+  mainMenuOpen = !!open;
+  if (!mainMenu) mainMenu = document.getElementById("mainMenu");
+  if (mainMenu) mainMenu.classList.toggle("open", mainMenuOpen);
+  updateMenuBtnState();
+}
+
+function toggleMainMenu() {
+  setMainMenuOpen(!mainMenuOpen);
+}
+
+// Back-compat: some places may still call updateInvBtnState from earlier patching.
+function updateInvBtnState() { updateMenuBtnState(); }
+
+// Button toggles the menu (not inventory)
+if (invBtn) {
+  invBtn.addEventListener("pointerdown", (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    toggleMainMenu();
+  });
+}
+
+// Prevent menu clicks from interacting with the canvas (attacks / movement)
+if (mainMenu) {
+  mainMenu.addEventListener("pointerdown", (e) => {
+    e.stopPropagation();
+    // Prevent pointerdown from ever reaching the canvas
+    // (helps on some browsers where pointer events behave oddly)
+    e.preventDefault();
+  });
+}
+
+// Close the menu when clicking outside
+document.addEventListener("pointerdown", (e) => {
+  if (!mainMenuOpen) return;
+  const t = e.target;
+  if (t === invBtn) return;
+  if (mainMenu && mainMenu.contains(t)) return;
+  setMainMenuOpen(false);
+});
+
+// Menu item actions (Items wired now; others can be enabled later)
+if (mainMenu) {
+  mainMenu.addEventListener("click", (e) => {
+    // Keep menu interactions from triggering canvas actions
+    e.stopPropagation();
+
+    const btn = e.target && e.target.closest ? e.target.closest(".main-menu-item") : null;
+    if (!btn) return;
+    if (btn.disabled || btn.classList.contains("disabled")) return;
+
+    const action = btn.getAttribute("data-action");
+    if (action === "items") {
+      toggleInventory();
+      setMainMenuOpen(false);
+      return;
+    }
+    if (action === "skills") {
+      toggleSkills();
+      setMainMenuOpen(false);
+      return;
+    }
+  });
+}
+// Escape closes the menu (and keeps existing ESC behavior elsewhere)
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape" && mainMenuOpen) {
+    setMainMenuOpen(false);
+  }
+});
+
+
+function updateInvBtnState() {
+  // If this runs before invBtn is assigned, try to grab it.
+  if (!invBtn) invBtn = document.getElementById("invBtn");
+  if (!invBtn) return;
+  invBtn.setAttribute("aria-expanded", inventoryOpen ? "true" : "false");
+}
+
+function guessWeaponTab() {
+  const me = worldPlayers && worldPlayers[myId];
+  const w = me?.equipment?.weapon ?? me?.weapon ?? null;
+  const wid = (typeof w === "string") ? w : (w && typeof w === "object" ? (w.id || w.itemId || w.type) : "");
+  const s = String(wid || "").toLowerCase();
+  if (s.includes("spear")) return "spear";
+  if (s.includes("wand")) return "wand";
+  if (s.includes("sword")) return "sword";
+  return "wand";
+}
+
+function toggleSkills() {
+  skillsOpen = !skillsOpen;
+  pendingSkillBind = null;
+
+  if (skillsOpen) {
+    // Only show one window at a time for now
+    inventoryOpen = false;
+    invUI = null;
+    invHover = null;
+
+    // pick a reasonable default tab (based on equipped weapon)
+    skillsTab = guessWeaponTab();
+
+    // lazy init window position
+    if (skillsWinX == null || skillsWinY == null) {
+      skillsWinX = Math.floor(canvas.width / 2 - 190);
+      skillsWinY = Math.floor(canvas.height / 2 - 170);
+    }
+  }
+
+  skillsDragging = false;
+}
+
+function toggleInventory() {
+  inventoryOpen = !inventoryOpen;
+
+  if (inventoryOpen) {
+    invItemMenu = null;
+    invItemMenuUI = null;
+    pendingItemBind = null;
+
+    skillsOpen = false;
+    skillsUI = null;
+    skillsDragging = false;
+  }
+  // lazy init window position
+  if (inventoryOpen && (invWinX == null || invWinY == null)) {
+    invWinX = Math.floor(canvas.width / 2 - 180);
+    invWinY = Math.floor(canvas.height / 2 - 180);
+  }
+
+  if (!inventoryOpen) {
+    invDragging = false;
+    invItemMenu = null;
+    invItemMenuUI = null;
+    pendingItemBind = null;
+  }
+
+  updateInvBtnState();
+}
+
 const ctx = canvas.getContext("2d");
 ctx.imageSmoothingEnabled = false;
 
@@ -958,6 +1655,241 @@ function startScreenShake(mag = 4, ms = 140) {
   screenShakeMag = Math.max(screenShakeMag, mag);
   screenShakeUntilMs = Math.max(screenShakeUntilMs, performance.now() + ms);
 }
+
+
+/* ======================
+   SKILLS UI (Tabbed)
+====================== */
+function drawSkillsMenu() {
+  const tabs = ["sword", "spear", "wand"];
+  const tabLabels = { sword: "Sword", spear: "Spear", wand: "Wand" };
+
+  // Basic skill catalog (placeholder-friendly)
+  const skillCatalog = {
+    sword: [],
+    spear: [
+      {
+        id: "skill2",
+        name: "Double Stab",
+        key: "2",
+        icon: skill2IconImg,
+        desc: "Stab twice quickly. Requires a spear.",
+      },
+    ],
+    wand: [
+      {
+        id: "skill1",
+        name: "Whirlpool Bolt",
+        key: "1",
+        icon: skill1IconImg,
+        desc: "Shoot a bolt that creates a whirlpool on impact. Requires a wand.",
+      },
+    ],
+  };
+
+  const HEADER_H = 26;
+  const TAB_H = 26;
+  const PAD = 14;
+
+  const panelW = 380;
+  const panelH = 320;
+
+  // init window if needed
+  if (skillsWinX == null || skillsWinY == null) {
+    skillsWinX = Math.floor(canvas.width / 2 - panelW / 2);
+    skillsWinY = Math.floor(canvas.height / 2 - panelH / 2);
+  }
+
+  // clamp to screen
+  skillsWinX = clamp(skillsWinX, 10, canvas.width - panelW - 10);
+  skillsWinY = clamp(skillsWinY, 10, canvas.height - panelH - 10);
+
+  const x = skillsWinX;
+  const y = skillsWinY;
+  const w = panelW;
+  const h = panelH;
+
+  skillsWinW = w;
+  skillsWinH = h;
+
+  // panel
+  ctx.save();
+  ctx.fillStyle = "rgba(0,0,0,0.80)";
+  ctx.fillRect(x, y, w, h);
+  ctx.strokeStyle = "rgba(255,255,255,0.22)";
+  ctx.strokeRect(x + 0.5, y + 0.5, w - 1, h - 1);
+
+  // header
+  ctx.fillStyle = "rgba(255,255,255,0.08)";
+  ctx.fillRect(x, y, w, HEADER_H);
+  ctx.fillStyle = "rgba(255,255,255,0.88)";
+  ctx.font = "13px system-ui, sans-serif";
+  ctx.textBaseline = "middle";
+  ctx.textAlign = "left";
+  ctx.fillText("Skills", x + 10, y + HEADER_H / 2);
+
+  // close button
+  const closeSize = 18;
+  const cx = x + w - closeSize - 6;
+  const cy = y + (HEADER_H - closeSize) / 2;
+  ctx.fillStyle = "rgba(255,255,255,0.10)";
+  ctx.fillRect(cx, cy, closeSize, closeSize);
+  ctx.strokeStyle = "rgba(255,255,255,0.22)";
+  ctx.strokeRect(cx + 0.5, cy + 0.5, closeSize - 1, closeSize - 1);
+  ctx.fillStyle = "rgba(255,255,255,0.80)";
+  ctx.textAlign = "center";
+  ctx.fillText("×", cx + closeSize / 2, cy + closeSize / 2 + 0.5);
+
+  skillsCloseRect = { x: cx, y: cy, w: closeSize, h: closeSize };
+  skillsHeaderRect = { x, y, w, h: HEADER_H };
+
+  // tabs
+  const tabY = y + HEADER_H;
+  const tabW = Math.floor((w - PAD * 2) / tabs.length);
+  const tabX0 = x + PAD;
+
+  skillsTabRects = {};
+  for (let i = 0; i < tabs.length; i++) {
+    const t = tabs[i];
+    const tx = tabX0 + i * tabW;
+    const active = (skillsTab === t);
+
+    ctx.fillStyle = active ? "rgba(255,255,255,0.14)" : "rgba(255,255,255,0.06)";
+    ctx.fillRect(tx, tabY, tabW - 6, TAB_H);
+    ctx.strokeStyle = active ? "rgba(255,255,255,0.28)" : "rgba(255,255,255,0.14)";
+    ctx.strokeRect(tx + 0.5, tabY + 0.5, tabW - 6 - 1, TAB_H - 1);
+
+    ctx.fillStyle = active ? "rgba(255,255,255,0.92)" : "rgba(255,255,255,0.70)";
+    ctx.font = "12px system-ui, sans-serif";
+    ctx.textAlign = "center";
+    ctx.fillText(tabLabels[t], tx + (tabW - 6) / 2, tabY + TAB_H / 2);
+
+    skillsTabRects[t] = { x: tx, y: tabY, w: tabW - 6, h: TAB_H };
+  }
+
+  // content area
+  const contentX = x + PAD;
+  const contentY = tabY + TAB_H + 10;
+  const contentW = w - PAD * 2;
+  const contentH = h - (contentY - y) - PAD;
+
+  ctx.fillStyle = "rgba(255,255,255,0.04)";
+  ctx.fillRect(contentX, contentY, contentW, contentH);
+  ctx.strokeStyle = "rgba(255,255,255,0.10)";
+  ctx.strokeRect(contentX + 0.5, contentY + 0.5, contentW - 1, contentH - 1);
+
+  const list = skillCatalog[skillsTab] || [];
+  skillsItemRects = [];
+
+  const cardH = 62;
+  const iconS = 34;
+  const gap = 10;
+
+  if (list.length === 0) {
+    ctx.fillStyle = "rgba(255,255,255,0.65)";
+    ctx.font = "12px system-ui, sans-serif";
+    ctx.textAlign = "center";
+    ctx.fillText("No skills yet for this weapon.", contentX + contentW / 2, contentY + 26);
+    ctx.fillStyle = "rgba(255,255,255,0.40)";
+    ctx.fillText("Add more skills later and they'll show up here.", contentX + contentW / 2, contentY + 46);
+  } else {
+    for (let i = 0; i < list.length; i++) {
+      const s = list[i];
+      const cy2 = contentY + 10 + i * (cardH + 10);
+      const cardX = contentX + 10;
+      const cardW = contentW - 20;
+
+      // card bg
+      ctx.fillStyle = "rgba(0,0,0,0.45)";
+      ctx.fillRect(cardX, cy2, cardW, cardH);
+      ctx.strokeStyle = "rgba(255,255,255,0.14)";
+      ctx.strokeRect(cardX + 0.5, cy2 + 0.5, cardW - 1, cardH - 1);
+
+      // icon box
+      const ix = cardX + 10;
+      const iy = cy2 + Math.floor((cardH - iconS) / 2);
+      ctx.fillStyle = "rgba(255,255,255,0.06)";
+      ctx.fillRect(ix, iy, iconS, iconS);
+      ctx.strokeStyle = "rgba(255,255,255,0.14)";
+      ctx.strokeRect(ix + 0.5, iy + 0.5, iconS - 1, iconS - 1);
+
+      // draw icon if ready
+      const img = s.icon;
+      if (img && img.complete && img.naturalWidth > 0) {
+        ctx.imageSmoothingEnabled = false;
+        ctx.drawImage(img, 0, 0, img.naturalWidth, img.naturalHeight, ix + 1, iy + 1, iconS - 2, iconS - 2);
+      } else {
+        ctx.fillStyle = "rgba(255,255,255,0.18)";
+        ctx.font = "10px system-ui, sans-serif";
+        ctx.textAlign = "center";
+        ctx.fillText("ICON", ix + iconS / 2, iy + iconS / 2);
+      }
+
+      // name + desc
+      const tx = ix + iconS + gap;
+      ctx.textAlign = "left";
+      ctx.fillStyle = "rgba(255,255,255,0.92)";
+      ctx.font = "13px system-ui, sans-serif";
+      ctx.fillText(s.name, tx, cy2 + 18);
+
+      ctx.fillStyle = "rgba(255,255,255,0.62)";
+      ctx.font = "11px system-ui, sans-serif";
+      ctx.fillText(s.desc, tx, cy2 + 38);
+
+      // key badge
+      const badge = hotbarKeyForSkill(s.id);
+      const bw = 28;
+      const bh = 18;
+      const bx = cardX + cardW - bw - 10;
+      const by = cy2 + 12;
+
+      ctx.fillStyle = "rgba(255,255,255,0.10)";
+      ctx.fillRect(bx, by, bw, bh);
+      ctx.strokeStyle = "rgba(255,255,255,0.18)";
+      ctx.strokeRect(bx + 0.5, by + 0.5, bw - 1, bh - 1);
+      ctx.fillStyle = "rgba(255,255,255,0.85)";
+      ctx.font = "12px system-ui, sans-serif";
+      ctx.textAlign = "center";
+      ctx.fillText(badge, bx + bw / 2, by + bh / 2);
+
+      // assign button (click to bind to a hotbar key)
+      const abw = 62;
+      const abh = 18;
+      const abx = cardX + cardW - abw - 10;
+      const aby = by + bh + 8;
+
+      const isBinding = !!(pendingSkillBind && pendingSkillBind.skillId === s.id);
+
+      ctx.fillStyle = isBinding ? "rgba(255,255,255,0.18)" : "rgba(255,255,255,0.08)";
+      ctx.fillRect(abx, aby, abw, abh);
+      ctx.strokeStyle = isBinding ? "rgba(255,255,255,0.32)" : "rgba(255,255,255,0.18)";
+      ctx.strokeRect(abx + 0.5, aby + 0.5, abw - 1, abh - 1);
+      ctx.fillStyle = "rgba(255,255,255,0.9)";
+      ctx.font = "12px system-ui, sans-serif";
+      ctx.textAlign = "center";
+      ctx.fillText(isBinding ? "Press 1-6" : "Assign", abx + abw / 2, aby + abh / 2);
+
+      skillsItemRects.push({
+        id: s.id,
+        rect: { x: cardX, y: cy2, w: cardW, h: cardH },
+        badgeRect: { x: bx, y: by, w: bw, h: bh },
+        assignRect: { x: abx, y: aby, w: abw, h: abh }
+      });
+    }
+  }
+
+  ctx.restore();
+
+  // expose hit-test data
+  skillsUI = {
+    x, y, w, h,
+    close: skillsCloseRect,
+    header: skillsHeaderRect,
+    tabs: skillsTabRects,
+    items: skillsItemRects,
+  };
+}
+
 
 /* --- DAMAGE POPUPS --- */
 const damagePops = []; // {x,y,text,color,untilMs}
@@ -1494,10 +2426,54 @@ function sendSkill2DoubleStab() {
 
 
 window.addEventListener("keydown", (e) => {
-  const k = e.key.toLowerCase();
+  const key = e.key;
+  const k = key.toLowerCase();
+
+  // If the Skills menu is waiting for a hotbar key, capture 1–6 (or Esc to cancel).
+  if (pendingSkillBind) {
+    if (key === "Escape") {
+      e.preventDefault();
+      pendingSkillBind = null;
+      hotbarToast("Skill bind canceled");
+      return;
+    }
+    if (!e.repeat && k >= "1" && k <= "6") {
+      e.preventDefault();
+      bindHotbarSkill(Number(k), pendingSkillBind.skillId);
+      pendingSkillBind = null;
+      return;
+    }
+    // While binding, don't let number keys trigger other actions.
+    if (k >= "1" && k <= "6") {
+      e.preventDefault();
+      return;
+    }
+  }
+
+  // If the Inventory item bind flow is waiting for a hotbar key, capture 1–6 (or Esc to cancel).
+  if (pendingItemBind) {
+    if (key === "Escape") {
+      e.preventDefault();
+      pendingItemBind = null;
+      hotbarToast("Item bind canceled");
+      return;
+    }
+    if (!e.repeat && k >= "1" && k <= "6") {
+      e.preventDefault();
+      bindHotbarItem(Number(k), pendingItemBind.itemId, pendingItemBind.preferSlot);
+      pendingItemBind = null;
+      return;
+    }
+    // swallow other keys while binding an item
+    if (!e.repeat) {
+      e.preventDefault();
+      return;
+    }
+  }
+
 
   // Debug editor hotkeys
-  if (e.key === "F1") {
+  if (key === "F1") {
     e.preventDefault();
     if (!e.repeat) {
       editorOpen = !editorOpen;
@@ -1511,7 +2487,7 @@ window.addEventListener("keydown", (e) => {
   }
 
   // Debug collision overlay
-  if (e.key === "F3") {
+  if (key === "F3") {
     e.preventDefault();
     if (!e.repeat) {
       debugHitboxes = !debugHitboxes;
@@ -1523,7 +2499,7 @@ window.addEventListener("keydown", (e) => {
 
   if (editorOpen) {
     // Don't let movement keys interfere while editing unless you want them.
-    if (e.key === "Tab") {
+    if (key === "Tab") {
       e.preventDefault();
       editorLayer = (editorLayer === "ground") ? "object" : "ground";
       editorTileIndex = 0;
@@ -1531,13 +2507,13 @@ window.addEventListener("keydown", (e) => {
       return;
     }
 
-    if (e.key === "[") {
+    if (key === "[") {
       e.preventDefault();
       const list = editorAllowedList();
       editorTileIndex = (editorTileIndex - 1 + list.length) % list.length;
       return;
     }
-    if (e.key === "]") {
+    if (key === "]") {
       e.preventDefault();
       const list = editorAllowedList();
       editorTileIndex = (editorTileIndex + 1) % list.length;
@@ -1556,89 +2532,56 @@ window.addEventListener("keydown", (e) => {
       return;
     }
 
-    if (e.ctrlKey && k === "e") {
+    if ((e.ctrlKey || e.metaKey) && k === "e") {
       e.preventDefault();
       exportCurrentMapToClipboard();
       return;
     }
   }
 
-
-
-if (k === "i") {
-  e.preventDefault();
-  if (!e.repeat) {
-    inventoryOpen = !inventoryOpen;
-    // lazy init window position
-    if (inventoryOpen && (invWinX == null || invWinY == null)) {
-      // will be centered using current invWinW/H once drawInventory runs the first time
-      invWinX = Math.floor(canvas.width / 2 - 180);
-      invWinY = Math.floor(canvas.height / 2 - 180);
-    }
-  }
-  return;
-}
-  
-  // Skill 1 (Vacuum / Whirlpool): press 1 to "prime" your next wand shot.
-// The whirlpool only starts (and cooldown begins) if that projectile hits a mob.
-  if (e.key === "1") {
+  // Toggle Skills
+  if (k === "k") {
     e.preventDefault();
     if (!e.repeat) {
-      const nowAbs = serverNowMs();
-      const nowUi = performance.now();
-
-      // Respect server-authored timers (epoch ms)
-      if (nowAbs < skill1ActiveUntilMs) {
-        triggerSkill1HotbarNack();
-        skill1Primed = false;
-      } else if (nowAbs < skill1CdUntilMs) {
-        triggerSkill1HotbarNack();
-        skill1Primed = false;
-      } else {
-        const me = worldPlayers[myId];
-        const weaponKey = me?.weapon || null;
-        if (weaponKey !== "wand") {
-          levelToastText = "Equip a wand to use Skill 1";
-          levelToastUntilMs = nowUi + 1500;
-          skill1Primed = false;
-        } else {
-          skill1Primed = true;
-          sendSkill1Arm(); // server-side validation/authoritative
-        }
-      }
+      if (typeof setMainMenuOpen === "function") setMainMenuOpen(false);
+      toggleSkills();
     }
     return;
   }
 
-
-
-  // Skill 2 (Double Stab): press 2 to quickly stab twice with a spear.
-  if (e.key === "2") {
+  // Toggle Inventory
+  if (k === "i") {
     e.preventDefault();
     if (!e.repeat) {
-      const nowAbs = serverNowMs();
-      const nowUi = performance.now();
-
-      if (nowAbs < skill2CdUntilMs) {
-        triggerSkill2HotbarNack();
-      } else {
-        const me = worldPlayers[myId];
-        const wid = me?.equipment?.weapon;
-        const weaponKey = me?.weapon || weaponKeyFromEquippedId(wid);
-        if (weaponKey !== "spear") {
-          levelToastText = "Equip a spear to use Skill 2";
-          levelToastUntilMs = nowUi + 1500;
-        } else {
-          // Aim Skill 2 the same way as click-attacks: use the current cursor direction when available.
-          if (lastAim && lastAim.has) sendSkill2DoubleStabAtWorld(lastAim.wx, lastAim.wy, lastAim.mx, lastAim.my);
-          else sendSkill2DoubleStab();
-        }
-      }
+      if (typeof setMainMenuOpen === "function") setMainMenuOpen(false);
+      toggleInventory();
     }
     return;
   }
 
-if (k === "e") {
+  // Hotbar 1..6 (use or bind)
+  if (k >= "1" && k <= "6") {
+    e.preventDefault();
+    if (e.repeat) return;
+
+    const n = Number(k);
+
+    // Ctrl/Cmd+number binds hovered inventory item (grid) to that hotbar slot
+    if (e.ctrlKey || e.metaKey) {
+      if (inventoryOpen && typeof invHover !== "undefined" && invHover && invHover.source === "grid") {
+        bindHotbarItem(n, invHover.id, invHover.slotIndex);
+        return;
+      }
+      hotbarToast("Hover an inventory item then press Ctrl+1-6 to bind");
+      return;
+    }
+
+    useHotbarSlot(n);
+    return;
+  }
+
+  // Interact
+  if (k === "e") {
     e.preventDefault();
     const now = performance.now();
     if (!e.repeat && now - lastEPressed > 200) {
@@ -1651,6 +2594,8 @@ if (k === "e") {
 
   setMoveKey(e, true);
 });
+
+
 window.addEventListener("keyup", (e) => setMoveKey(e, false));
 
 // Editor painting
@@ -1730,6 +2675,31 @@ canvas.addEventListener("mousedown", (e) => {
   const mx = e.clientX - rect.left;
   const my = e.clientY - rect.top;
 
+  // If an item submenu is open, handle it first.
+  if (invItemMenu && invItemMenuUI) {
+    if (rectHit(invItemMenuUI.panel, mx, my)) {
+      if (rectHit(invItemMenuUI.btnUse, mx, my)) {
+        sendInvClick(invItemMenu.slotIndex);
+        invItemMenu = null;
+        invItemMenuUI = null;
+        return;
+      }
+      if (rectHit(invItemMenuUI.btnBind, mx, my)) {
+        pendingItemBind = { itemId: invItemMenu.itemId, preferSlot: invItemMenu.slotIndex };
+        invItemMenu = null;
+        invItemMenuUI = null;
+        hotbarToast("Press 1–6 to bind item (Esc to cancel)");
+        return;
+      }
+      return; // clicked inside the panel but not on a button
+    } else {
+      // click outside closes the submenu (and continues)
+      invItemMenu = null;
+      invItemMenuUI = null;
+    }
+  }
+
+
   // close button
   if (invCloseRect && mx >= invCloseRect.x && mx <= invCloseRect.x + invCloseRect.w && my >= invCloseRect.y && my <= invCloseRect.y + invCloseRect.h) {
     e.preventDefault();
@@ -1765,8 +2735,101 @@ canvas.addEventListener("mousedown", (e) => {
   if (sx < 0 || sy < 0 || sx >= g.cols || sy >= g.rows) return;
 
   const slotIndex = sy * g.cols + sx;
+
+  // If this is a consumable, open the submenu instead of immediately using it.
+  const me = (typeof worldPlayers !== "undefined" && typeof myId !== "undefined") ? worldPlayers?.[myId] : null;
+  const slots = me?.inventory?.slots || [];
+  const slot = slots[slotIndex];
+
+  if (!slot) {
+    invItemMenu = null;
+    invItemMenuUI = null;
+    return;
+  }
+
+  if (isConsumableItemId(slot.id)) {
+    // Anchor menu near the clicked slot
+    const slotX = g.x + sx * g.slotSize;
+    const slotY = g.y + sy * g.slotSize;
+
+    invItemMenu = {
+      x: slotX + g.slotSize + 8,
+      y: slotY,
+      slotIndex,
+      itemId: slot.id,
+    };
+    return;
+  }
+
+  // Non-consumables keep the old behavior (equip / etc.)
   sendInvClick(slotIndex);
 });
+
+
+canvas.addEventListener("mousedown", (e) => {
+  if (!skillsOpen || !skillsUI) return;
+
+  // Skills menu consumes clicks so they don't trigger attacks.
+  e.preventDefault();
+  e.stopImmediatePropagation();
+
+  const rect = canvas.getBoundingClientRect();
+  const mx = e.clientX - rect.left;
+  const my = e.clientY - rect.top;
+
+  // close button
+  const c = skillsUI.close;
+  if (c && mx >= c.x && mx <= c.x + c.w && my >= c.y && my <= c.y + c.h) {
+    skillsOpen = false;
+    skillsDragging = false;
+    pendingSkillBind = null;
+    return;
+  }
+
+  // tabs
+  if (skillsUI.tabs) {
+    for (const [t, r] of Object.entries(skillsUI.tabs)) {
+      if (mx >= r.x && mx <= r.x + r.w && my >= r.y && my <= r.y + r.h) {
+        skillsTab = t;
+        return;
+      }
+    }
+  }
+
+  // drag header (but not when clicking close)
+  const h = skillsUI.header;
+  if (h && mx >= h.x && mx <= h.x + h.w && my >= h.y && my <= h.y + h.h) {
+    skillsDragging = true;
+    skillsDragOffX = mx - skillsWinX;
+    skillsDragOffY = my - skillsWinY;
+    return;
+  }
+
+  // click a skill card (for now just a toast)
+  if (skillsUI.items) {
+    for (const it of skillsUI.items) {
+      const r = it.rect;
+      if (mx >= r.x && mx <= r.x + r.w && my >= r.y && my <= r.y + r.h) {
+        // Clicking any skill card enters a bind mode: press 1–6 to assign to hotbar.
+        pendingSkillBind = { skillId: it.id };
+        levelToastText = "Press 1-6 to bind that skill to your hotbar (Esc to cancel).";
+        levelToastUntilMs = performance.now() + 1800;
+        return;
+      }
+    }
+  }
+});
+
+canvas.addEventListener("mousemove", (e) => {
+  if (!skillsOpen || !skillsDragging) return;
+  const rect = canvas.getBoundingClientRect();
+  const mx = e.clientX - rect.left;
+  const my = e.clientY - rect.top;
+
+  skillsWinX = Math.round(mx - skillsDragOffX);
+  skillsWinY = Math.round(my - skillsDragOffY);
+});
+
 
 window.addEventListener("mousemove", (e) => {
   if (!inventoryOpen || !invDragging) return;
@@ -1822,6 +2885,7 @@ canvas.addEventListener("mousedown", (e) => {
 
 window.addEventListener("mouseup", () => {
   invDragging = false;
+  skillsDragging = false;
 });
 
 /* ======================
@@ -2870,40 +3934,52 @@ function drawHud() {
   const hpPct = clamp(maxHp ? hp / maxHp : 0, 0, 1);
   const xpPct = clamp(xpNext ? xp / xpNext : 0, 0, 1);
 
-  const x = 14, y = 14, w = 170, h = 14;
+  const w = 170;
+  const hpH = 14;
+  const xpH = 7;
+  const padding = 4;
 
-  ctx.save();
+  const x = canvas.width / 2 - w / 2;
+  const hotbarBoxH = 44; // must match drawHotbar()
+  const hotbarPadBottom = 12; // must match drawHotbar()
+  const hudClearance = hotbarBoxH + hotbarPadBottom + 10;
+  const y = Math.max(14, canvas.height - (hpH + xpH + padding * 3) - hudClearance);
+ctx.save();
   ctx.fillStyle = "rgba(0,0,0,0.55)";
-  ctx.fillRect(x - 10, y - 10, w + 20, 78);
+  ctx.fillRect(x - 4, y - 4, w + 8, hpH + xpH + padding * 2);
 
-  // HP
+  // HP BAR
   ctx.fillStyle = "rgba(255,255,255,0.15)";
-  ctx.fillRect(x, y, w, h);
+  ctx.fillRect(x, y, w, hpH);
   ctx.fillStyle = "#ff4757";
-  ctx.fillRect(x, y, Math.round(w * hpPct), h);
+  ctx.fillRect(x, y, Math.round(w * hpPct), hpH);
   ctx.strokeStyle = "rgba(255,255,255,0.35)";
-  ctx.strokeRect(x + 0.5, y + 0.5, w - 1, h - 1);
-
-  // XP
-  const y2 = y + 22;
-  ctx.fillStyle = "rgba(255,255,255,0.15)";
-  ctx.fillRect(x, y2, w, h);
-  ctx.fillStyle = "#4dabf7";
-  ctx.fillRect(x, y2, Math.round(w * xpPct), h);
-  ctx.strokeStyle = "rgba(255,255,255,0.35)";
-  ctx.strokeRect(x + 0.5, y2 + 0.5, w - 1, h - 1);
+  ctx.strokeRect(x + 0.5, y + 0.5, w - 1, hpH - 1);
 
   ctx.fillStyle = "#fff";
-  ctx.font = "14px system-ui";
-  ctx.textBaseline = "top";
-  ctx.fillText(`XP ${xp}/${xpNext}`, x, y2 + h + 6);
-  ctx.fillText(`(I) Inventory`, x, y2 + h + 26);
+  ctx.font = "12px system-ui";
+  ctx.textBaseline = "middle";
+  ctx.textAlign = "center";
+  ctx.fillText(`HP ${hp}/${maxHp}`, x + w / 2, y + hpH / 2);
 
-  // Hotbar (bottom-left)
-  drawSkillHotbar();
+  // XP BAR
+  const y2 = y + hpH ;
+  ctx.fillStyle = "rgba(255,255,255,0.15)";
+  ctx.fillRect(x, y2, w, xpH);
+  ctx.fillStyle = "#4dabf7";
+  ctx.fillRect(x, y2, Math.round(w * xpPct), xpH);
+  ctx.strokeStyle = "rgba(255,255,255,0.35)";
+  ctx.strokeRect(x + 0.5, y2 + 0.5, w - 1, xpH - 1);
+
+  ctx.fillStyle = "#fff";
+  ctx.font = "10px system-ui";
+  ctx.textBaseline = "middle";
+  ctx.textAlign = "center";
+  ctx.fillText(`XP ${xp}/${xpNext}`, x + w / 2, y2 + xpH / 2);
 
   ctx.restore();
 }
+
 
 
 /* ======================
@@ -3233,6 +4309,78 @@ function drawInventory(inv, equipment) {
     }
   }
 
+
+  // ---- Item submenu (Use / Bind to hotbar) ----
+  // Only used for consumables; opened by clicking a consumable in the inventory grid.
+  if (invItemMenu) {
+    const cur = slots?.[invItemMenu.slotIndex];
+    if (!cur || cur.id !== invItemMenu.itemId) {
+      invItemMenu = null;
+      invItemMenuUI = null;
+    } else {
+      const menuW = 170;
+      const pad = 8;
+      const rowH = 22;
+      const gap = 6;
+      const menuH = pad * 2 + rowH * 2 + gap;
+
+      let mx = invItemMenu.x;
+      let my = invItemMenu.y;
+
+      // If we'd overflow right, pop to the left of the slot instead.
+      if (mx + menuW > canvas.width - 8) {
+        mx = (invItemMenu.x - menuW) - 16;
+      }
+
+      // Clamp to screen bounds
+      mx = clamp(mx, 8, canvas.width - menuW - 8);
+      my = clamp(my, 8, canvas.height - menuH - 8);
+
+      const panel = { x: mx, y: my, w: menuW, h: menuH };
+      const btnUse  = { x: mx + pad, y: my + pad, w: menuW - pad * 2, h: rowH };
+      const btnBind = { x: mx + pad, y: my + pad + rowH + gap, w: menuW - pad * 2, h: rowH };
+
+      invItemMenuUI = { panel, btnUse, btnBind };
+
+      ctx.save();
+      ctx.fillStyle = "rgba(0,0,0,0.88)";
+      ctx.fillRect(panel.x, panel.y, panel.w, panel.h);
+      ctx.strokeStyle = "rgba(255,255,255,0.20)";
+      ctx.strokeRect(panel.x, panel.y, panel.w, panel.h);
+
+      // Buttons
+      ctx.fillStyle = "rgba(255,255,255,0.06)";
+      ctx.fillRect(btnUse.x, btnUse.y, btnUse.w, btnUse.h);
+      ctx.fillRect(btnBind.x, btnBind.y, btnBind.w, btnBind.h);
+
+      ctx.strokeStyle = "rgba(255,255,255,0.14)";
+      ctx.strokeRect(btnUse.x, btnUse.y, btnUse.w, btnUse.h);
+      ctx.strokeRect(btnBind.x, btnBind.y, btnBind.w, btnBind.h);
+
+      ctx.font = "12px system-ui";
+      ctx.textAlign = "left";
+      ctx.textBaseline = "middle";
+      ctx.fillStyle = "#ddd";
+      ctx.fillText("Use item", btnUse.x + 10, btnUse.y + Math.floor(btnUse.h / 2));
+      ctx.fillText("Bind to hotbar", btnBind.x + 10, btnBind.y + Math.floor(btnBind.h / 2));
+
+      ctx.restore();
+    }
+  } else {
+    invItemMenuUI = null;
+  }
+
+  // Bind hint (shows inside the inventory window)
+  if (pendingItemBind) {
+    ctx.save();
+    ctx.font = "12px system-ui";
+    ctx.textAlign = "left";
+    ctx.textBaseline = "alphabetic";
+    ctx.fillStyle = "rgba(255,255,255,0.85)";
+    ctx.fillText("Press 1–6 to bind item to hotbar (Esc to cancel)", startX + PAD, startY + panelH - 10);
+    ctx.restore();
+  }
+
   ctx.restore();
 }
 
@@ -3353,7 +4501,7 @@ function getInventoryHover(mx, my, inv, equipment) {
   if (!slot) return null;
 
   const rect = { x: g.x + sx * g.slotSize, y: g.y + sy * g.slotSize, w: g.slotSize, h: g.slotSize };
-  return { id: slot.id, qty: slot.qty || 1, source: "grid", rect };
+  return { id: slot.id, qty: slot.qty || 1, source: "grid", slotIndex, rect };
 }
 
 function drawInventoryTooltip(hover, preferX, preferY) {
@@ -3826,6 +4974,7 @@ function loop(nowMs) {
     // Weapon visuals: draw UP swings *behind* the player so they don't sit on top of the sprite.
     // (Left/Right/Down stay in front as before.)
     let weapon = null;
+    let hasEquippedWeapon = false;
     const p2 = (!isNpc) ? worldPlayers[e.id] : null;
     let weaponActive = false;
     let weaponPhase01 = 0;
@@ -3834,9 +4983,11 @@ function loop(nowMs) {
     let renderDir = st.dir;  // direction used for rendering (locks during attack)
     if (!isNpc) {
       weapon = (p2 && p2.weapon && p2.weapon !== "none" && p2.weapon !== "unarmed") ? p2.weapon : null;
+      hasEquippedWeapon = !!(p2 && p2.equipment && p2.equipment.weapon);
+      if (!hasEquippedWeapon) weapon = null;
 
       const serverAnim = p2 ? (p2.atkAnim || 0) : 0;
-      weaponActive = (serverAnim > 0);
+      weaponActive = (serverAnim > 0) && hasEquippedWeapon && !!weapon;
       if (weaponActive) {
         // serverAnim counts down from LOCAL_SWING_DUR
         weaponPhase01 = clamp(1 - (serverAnim / LOCAL_SWING_DUR), 0, 1);
@@ -4018,6 +5169,7 @@ drawSprite(bodySprite, drawX, drawY, renderDir, bodyFrame, bodyFW, bodyFH);
 
   drawFadeOverlay();
   drawHud();
+  drawHotbar();
 
   if (inventoryOpen) {
     const me = worldPlayers[myId];
@@ -4035,6 +5187,12 @@ drawSprite(bodySprite, drawX, drawY, renderDir, bodyFrame, bodyFW, bodyFH);
     invUI = null;
     invHover = null;
   }
+  if (skillsOpen) {
+    drawSkillsMenu();
+  } else {
+    skillsUI = null;
+  }
+
   drawLevelToast();
 
   }

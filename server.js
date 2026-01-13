@@ -679,6 +679,12 @@ potion_purple: {
   lucky_charm:   { id: "lucky_charm",   name: "Lucky Charm",   type: "accessory", slot: "accessory", maxStack: 1 }
 };
 
+// Prevent wasting healing potions when already at full HP.
+function isHealingConsumable(def) {
+  const id = def && def.id;
+  return id === "potion_small" || id === "potion_green" || id === "potion_purple";
+}
+
 function addItemToInventory(p, itemId, amount) {
   const def = ITEMS[itemId];
   if (!def || amount <= 0) return false;
@@ -1368,6 +1374,7 @@ if (msg.type === "skill2DoubleStab") {
 
       // Otherwise, consume if it has onUse
       if (typeof def.onUse === "function") {
+        if (isHealingConsumable(def) && p.hp >= p.maxHp) return;
         def.onUse(p);
         stack.qty -= 1;
         if (stack.qty <= 0) p.inventory.slots[slotIndex] = null;
@@ -1747,6 +1754,7 @@ if (msg.type === "useItem") {
   const def = ITEMS[slot.id];
   if (!def || !def.onUse) return;
 
+  if (isHealingConsumable(def) && p.hp >= p.maxHp) return;
   def.onUse(p);
   slot.qty -= 1;
   if (slot.qty <= 0) p.inventory.slots[slotIndex] = null;
