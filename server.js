@@ -59,11 +59,19 @@ async function ensurePostgresSchema() {
       equipment jsonb not null default '{}'::jsonb,
       inventory jsonb not null default '{}'::jsonb,
       quests jsonb not null default '{}'::jsonb,
+      hotbar jsonb not null default '[]'::jsonb,
+      monster_book jsonb not null default '{}'::jsonb,
       updated_at timestamptz not null default now()
     );
   `);
 
-  await pool.query(`create index if not exists players_updated_at_idx on players(updated_at);`);
+    // Add new columns safely for existing deployments
+  await pool.query(`alter table players add column if not exists hotbar jsonb not null default '[]'::jsonb;`);
+
+await pool.query(`create index if not exists players_updated_at_idx on players(updated_at);`);
+
+  // Migration: add monster_book if table already existed
+  await pool.query(`alter table players add column if not exists monster_book jsonb not null default '{}'::jsonb;`);
 
   console.log("✅ Postgres schema ensured.");
 }
@@ -84,9 +92,9 @@ async function dbSavePlayer(p) {
   await pool.query(
     `
     insert into players
-      (name, level, xp, xp_next, atk, hp, max_hp, map_id, x, y, gold, equipment, inventory, quests, updated_at)
+      (name, level, xp, xp_next, atk, hp, max_hp, map_id, x, y, gold, equipment, inventory, quests, hotbar, monster_book, updated_at)
     values
-      ($1,   $2,    $3, $4,     $5,  $6, $7,     $8,    $9, $10,$11, $12::jsonb, $13::jsonb, $14::jsonb, now())
+      ($1,   $2,    $3, $4,     $5,  $6, $7,     $8,    $9, $10,$11, $12::jsonb, $13::jsonb, $14::jsonb, $15::jsonb, $16::jsonb, now())
     on conflict (name) do update set
       level=excluded.level,
       xp=excluded.xp,
@@ -101,6 +109,8 @@ async function dbSavePlayer(p) {
       equipment=excluded.equipment,
       inventory=excluded.inventory,
       quests=excluded.quests,
+      hotbar=excluded.hotbar,
+      monster_book=excluded.monster_book,
       updated_at=now()
     `,
     [
@@ -118,6 +128,8 @@ async function dbSavePlayer(p) {
       JSON.stringify(p.equipment || { weapon: null, armor: null, hat: null, accessory: null }),
       JSON.stringify(p.inventory || { size: 24, slots: [] }),
       JSON.stringify(p.quests || {}),
+      JSON.stringify(p.hotbar || new Array(6).fill(null)),
+      JSON.stringify(p.monsterBook || {}),
     ]
   );
 }
@@ -151,6 +163,16 @@ function applyRowToPlayer(p, row) {
   p.quests = row.quests && typeof row.quests === "object"
     ? row.quests
     : (p.quests || {});
+
+  p.hotbar = Array.isArray(row.hotbar)
+    ? row.hotbar
+    : (p.hotbar || new Array(6).fill(null));
+
+  if (!Array.isArray(p.hotbar) || p.hotbar.length !== 6) p.hotbar = new Array(6).fill(null);
+
+  p.monsterBook = row.monster_book && typeof row.monster_book === "object"
+    ? row.monster_book
+    : (p.monsterBook || {});
 
   p.gold = row.gold ?? p.gold;
 
@@ -486,6 +508,24 @@ function awardXp(player, amount) {
   }
 }
 
+
+function recordMonsterBookKill(killer, mobType) {
+  if (!killer || !mobType) return;
+  if (!killer.monsterBook || typeof killer.monsterBook !== "object") killer.monsterBook = {};
+  const prev = killer.monsterBook[mobType];
+  const wasNew = !prev;
+  const entry = prev && typeof prev === "object" ? prev : { kills: 0 };
+  entry.kills = (entry.kills ?? 0) + 1;
+  killer.monsterBook[mobType] = entry;
+
+  const ws = idToSocket.get(killer.id);
+  if (ws) {
+    send(ws, { type: "monsterBookUpdate", mobType, entry, isNew: wasNew });
+    // Also send the full book so the client can rebuild a sorted list easily.
+    send(ws, { type: "monsterBook", book: killer.monsterBook });
+  }
+}
+
 function killMobAndReward(m, killerId) {
   if (!m || m.respawnIn > 0) return;
 
@@ -494,6 +534,7 @@ function killMobAndReward(m, killerId) {
   if (killer) {
     handleQuestProgress(killer, m);
     awardXp(killer, m.xp ?? MOB_DEFS[m.mobType]?.xp ?? 12);
+    recordMonsterBookKill(killer, m.mobType);
   }
 
   const coins = 2 + Math.floor(Math.random() * 4);
@@ -561,6 +602,31 @@ const MOB_DROP_TABLE = {
     { itemId: "potion_green", chance: 0.3, qty: 1 },
   ],
 };
+
+const MOB_CATALOG = (() => {
+  // Catalog for UI (Monster Book). Built from server-authoritative data.
+  const out = {};
+  const coinDrop = { itemId: "coin", chance: 1, qty: { min: 2, max: 5 } };
+
+  const titleCase = (s) =>
+    s.split(/[_\s]+/g).filter(Boolean).map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(" ");
+
+  for (const [mobType, def] of Object.entries(MOB_DEFS)) {
+    const table = MOB_DROP_TABLE[mobType] || [];
+    out[mobType] = {
+      id: mobType,
+      name: titleCase(mobType),
+      maxHp: def?.maxHp ?? 0,
+      damage: def?.damage ?? 0,
+      drops: [coinDrop, ...table.map(d => ({
+        itemId: d.itemId,
+        chance: Math.max(0, Math.min(1, Number(d.chance ?? 0))),
+        qty: d.qty ?? 1
+      }))],
+    };
+  }
+  return out;
+})();
 
 function resolveDropQty(qtySpec) {
   if (typeof qtySpec === "number") return qtySpec;
@@ -1053,11 +1119,17 @@ wss.on("connection", (ws) => {
     // equipment (server authoritative)
     equipment: { weapon: null, armor: null, hat: null, accessory: null },
 
+    // hotbar (server authoritative, persisted)
+    hotbar: new Array(6).fill(null),
+
     // inventory (server authoritative)
     inventory: { size: 24, slots: [ { id: "training_sword", qty: 1 }, { id: "training_spear", qty: 1 }, { id: "candy_cane_spear", qty: 1 }, { id: "fang_spear", qty: 1 }, { id: "training_wand", qty: 1 }, { id: "cloth_armor", qty: 1 }, { id: "charger_suit", qty: 1 }, { id: "cloth_hat", qty: 1 }, { id: "charger_helmet", qty: 1 }, { id: "lucky_charm", qty: 1 },{ id: "potion_green", qty: 2 },{ id: "potion_purple", qty: 2 },, ...Array(19).fill(null) ] },
 
 // quests (server authoritative)
-quests: { jangoon_red_duke: { started: false, kills: 0, completed: false, rewarded: false } },
+quests: { jangoon_red_duke: { started: false, 
+    // monster book (server authoritative)
+    monsterBook: {},
+kills: 0, completed: false, rewarded: false } },
 
 
 // skills (server authoritative timers)
@@ -1093,6 +1165,8 @@ skill2CdUntilMs: 0,
     playerRadius: PLAYER_RADIUS,
     portalTile: PORTAL_TILE,
     weapons: WEAPONS,
+    mobCatalog: MOB_CATALOG,
+    monsterBook: (players.get(id)?.monsterBook) || {},
   });
 
 ws.on("message", async (buf) => {
@@ -1122,8 +1196,43 @@ ws.on("message", async (buf) => {
 	  }
 
 	  send(ws, { type: "nameAccepted", name: p.name });
+	  // send persisted hotbar to client (so it loads across logins)
+	  send(ws, { type: "hotbarState", slots: p.hotbar || new Array(6).fill(null) });
 	  return;
 	}
+
+    if (msg.type === "setHotbar") {
+      const inSlots = Array.isArray(msg.slots) ? msg.slots : [];
+      const out = new Array(6).fill(null);
+
+      for (let i = 0; i < 6; i++) {
+        const s = inSlots[i];
+        if (!s || typeof s !== "object") { out[i] = null; continue; }
+
+        if (s.type === "skill" && typeof s.id === "string") {
+          // Allow only known skills (extend this list as you add more)
+          const sid = s.id;
+          if (sid === "skill1" || sid === "skill2") out[i] = { type: "skill", id: sid };
+          else out[i] = null;
+          continue;
+        }
+
+        if (s.type === "item") {
+          const itemId = (typeof s.itemId === "string") ? s.itemId : ((typeof s.id === "string") ? s.id : "");
+          if (!itemId || !ITEMS[itemId]) { out[i] = null; continue; }
+          const preferSlot = Number.isInteger(s.preferSlot) ? s.preferSlot : undefined;
+          out[i] = preferSlot === undefined ? { type: "item", itemId } : { type: "item", itemId, preferSlot };
+          continue;
+        }
+
+        out[i] = null;
+      }
+
+      p.hotbar = out;
+      send(ws, { type: "hotbarState", slots: p.hotbar });
+      return;
+    }
+
 
 
     if (msg.type === "input") {
@@ -2329,6 +2438,7 @@ whirlpools: Array.from(whirlpools.values())
 selfSkill1ActiveUntilMs: (players.get(socketToId.get(ws))?.skill1ActiveUntilMs) || 0,
 selfSkill1CdUntilMs: (players.get(socketToId.get(ws))?.skill1CdUntilMs) || 0,
 selfSkill2CdUntilMs: (players.get(socketToId.get(ws))?.skill2CdUntilMs) || 0,
+selfMonsterBook: (players.get(socketToId.get(ws))?.monsterBook) || {},
       players: ps,
       npcs: ns,
       mobs: ms,

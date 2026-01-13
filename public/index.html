@@ -86,6 +86,7 @@
     <div id="mainMenu" class="main-menu" role="menu" aria-label="Game menu">
       <button class="main-menu-item" type="button" data-action="items" role="menuitem">Items <span class="hint">I</span></button>
       <button class="main-menu-item" type="button" data-action="skills" role="menuitem">Skills <span class="hint">K</span></button>
+      <button class="main-menu-item" type="button" data-action="book" role="menuitem">Monster Book <span class="hint">B</span></button>
       <button class="main-menu-item disabled" type="button" data-action="quests" role="menuitem" aria-disabled="true" disabled>Quests <span class="hint">Soon</span></button>
       <button class="main-menu-item disabled" type="button" data-action="settings" role="menuitem" aria-disabled="true" disabled>Settings <span class="hint">Soon</span></button>
     </div>
@@ -241,10 +242,45 @@ function isConsumableItemId(itemId) {
 }
 
 let hotbarSlots = [
-  { type: "skill", id: "skill1" },
-  { type: "skill", id: "skill2" },
-  null, null, null, null,
+  null, null, null, null, null, null,
 ];
+// ------------------------------
+// Hotbar persistence (server-side)
+// ------------------------------
+const HOTBAR_SERVER_SYNC_DEBOUNCE_MS = 120;
+let _hotbarSyncT = null;
+
+function sanitizeHotbarSlots(slots) {
+  const out = new Array(HOTBAR_SIZE).fill(null);
+  if (!Array.isArray(slots)) return out;
+  for (let i = 0; i < HOTBAR_SIZE; i++) {
+    const s = slots[i];
+    if (!s || typeof s !== "object") { out[i] = null; continue; }
+    if (s.type === "skill" && typeof s.id === "string") {
+      out[i] = { type: "skill", id: s.id };
+    } else if (s.type === "item") {
+      const itemId = (typeof s.itemId === "string") ? s.itemId : ((typeof s.id === "string") ? s.id : "");
+      if (!itemId) { out[i] = null; continue; }
+      const preferSlot = Number.isFinite(s.preferSlot) ? s.preferSlot : undefined;
+      out[i] = preferSlot === undefined ? { type: "item", itemId } : { type: "item", itemId, preferSlot };
+    } else {
+      out[i] = null;
+    }
+  }
+  return out;
+}
+
+function queueHotbarSync() {
+  // Don’t spam the server while the user is binding multiple things quickly.
+  if (typeof ws === "undefined") return;
+  if (_hotbarSyncT) clearTimeout(_hotbarSyncT);
+  _hotbarSyncT = setTimeout(() => {
+    _hotbarSyncT = null;
+    if (ws && ws.readyState === 1) {
+      ws.send(JSON.stringify({ type: "setHotbar", slots: hotbarSlots }));
+    }
+  }, HOTBAR_SERVER_SYNC_DEBOUNCE_MS);
+}
 
 // Quick visual feedback when a hotbar slot is successfully used
 const HOTBAR_FLASH_MS = 140;
@@ -415,6 +451,7 @@ function bindHotbarItem(n1, itemId, preferSlot) {
   const idx = n1 - 1;
   if (idx < 0 || idx >= HOTBAR_SIZE) return;
   hotbarSlots[idx] = { type: "item", itemId, preferSlot };
+  queueHotbarSync();
   hotbarToast(`Bound ${n1} → item`);
 }
 
@@ -422,6 +459,7 @@ function bindHotbarSkill(n1, skillId) {
   const idx = n1 - 1;
   if (idx < 0 || idx >= HOTBAR_SIZE) return;
   hotbarSlots[idx] = { type: "skill", id: skillId };
+  queueHotbarSync();
   hotbarToast(`Bound ${n1} → ${skillId}`);
 }
 
@@ -957,6 +995,24 @@ let skillsDragOffX = 0;
 let skillsDragOffY = 0;
 let skillsCloseRect = null;
 let skillsHeaderRect = null;
+
+// Monster Book (draggable)
+let monsterBookOpen = false;
+let monsterBook = {};     // { mobType: { kills } }
+let mobCatalog = {};      // from server (authoritative): { mobType: {name,maxHp,damage,drops:[] } }
+let bookUI = null;        // cached layout for click/scroll
+let bookWinX = null;
+let bookWinY = null;
+let bookWinW = 0;
+let bookWinH = 0;
+let bookDragging = false;
+let bookDragOffX = 0;
+let bookDragOffY = 0;
+let bookCloseRect = null;
+let bookHeaderRect = null;
+let bookScrollY = 0;
+
+
 let skillsTabRects = null; // {sword:{...}, spear:{...}, wand:{...}}
 let skillsItemRects = null; // [{id, rect}, ...]
 
@@ -1248,7 +1304,7 @@ mobSprites.snail_red.src  = "/assets/mobs/snail_red.png";
 /* ======================
    EQUIPMENT ICONS (32x32)
 ====================== */
-const equipIcons = {
+var equipIcons = {
   training_sword: new Image(),
   training_spear: new Image(),
   training_wand:  new Image(),
@@ -1264,6 +1320,11 @@ const equipIcons = {
   potion_green: new Image(),
   potion_purple: new Image(),
 };
+
+// coin icon (used by drops list; safe if missing)
+equipIcons.coin = new Image();
+equipIcons.coin.src = "/assets/items/coin.png";
+
 
 equipIcons.training_sword.src = "/assets/equipment/training_sword.png";
 equipIcons.training_spear.src = "/assets/equipment/training_spear.png";
@@ -1402,6 +1463,11 @@ if (mainMenu) {
       setMainMenuOpen(false);
       return;
     }
+    if (action === "book") {
+      toggleMonsterBook();
+      setMainMenuOpen(false);
+      return;
+    }
   });
 }
 // Escape closes the menu (and keeps existing ESC behavior elsewhere)
@@ -1435,6 +1501,9 @@ function toggleSkills() {
   pendingSkillBind = null;
 
   if (skillsOpen) {
+    monsterBookOpen = false;
+    bookUI = null;
+    bookDragging = false;
     // Only show one window at a time for now
     inventoryOpen = false;
     invUI = null;
@@ -1453,10 +1522,42 @@ function toggleSkills() {
   skillsDragging = false;
 }
 
+
+function toggleMonsterBook() {
+  monsterBookOpen = !monsterBookOpen;
+
+  if (monsterBookOpen) {
+    // Only show one window at a time for now
+    inventoryOpen = false;
+    invUI = null;
+    invHover = null;
+    invDragging = false;
+
+    skillsOpen = false;
+    skillsUI = null;
+    skillsDragging = false;
+
+    // reset any bind mode
+    pendingSkillBind = null;
+    pendingItemBind = null;
+  }
+
+  // lazy init window position
+  if (monsterBookOpen && (bookWinX == null || bookWinY == null)) {
+    bookWinX = Math.floor(canvas.width / 2 - 560 / 2);
+    bookWinY = Math.floor(canvas.height / 2 - 420 / 2);
+  }
+}
+
+
+
 function toggleInventory() {
   inventoryOpen = !inventoryOpen;
 
   if (inventoryOpen) {
+    monsterBookOpen = false;
+    bookUI = null;
+    bookDragging = false;
     invItemMenu = null;
     invItemMenuUI = null;
     pendingItemBind = null;
@@ -2021,6 +2122,220 @@ let activeDialogue = null;
 let levelToastUntilMs = 0;
 let levelToastText = "";
 
+
+function drawMonsterBook() {
+  const PAD = 14;
+  const HEADER_H = 28;
+
+  const panelW = 560;
+  const panelH = 420;
+
+  if (bookWinX == null || bookWinY == null) {
+    bookWinX = Math.floor(canvas.width / 2 - panelW / 2);
+    bookWinY = Math.floor(canvas.height / 2 - panelH / 2);
+  }
+
+  const x = bookWinX;
+  const y = bookWinY;
+  const w = panelW;
+  const h = panelH;
+
+  bookWinW = w;
+  bookWinH = h;
+
+  // clamp position to screen
+  bookWinX = clamp(bookWinX, 8, canvas.width - w - 8);
+  bookWinY = clamp(bookWinY, 8, canvas.height - h - 8);
+
+  ctx.save();
+
+  // Panel
+  ctx.fillStyle = "rgba(0,0,0,0.72)";
+  ctx.fillRect(x, y, w, h);
+  ctx.strokeStyle = "rgba(255,255,255,0.18)";
+  ctx.strokeRect(x, y, w, h);
+
+  // Header
+  ctx.fillStyle = "rgba(255,255,255,0.06)";
+  ctx.fillRect(x, y, w, HEADER_H);
+  ctx.fillStyle = "rgba(255,255,255,0.90)";
+  ctx.font = "16px sans-serif";
+  ctx.textBaseline = "middle";
+  ctx.fillText("Monster Book", x + PAD, y + HEADER_H / 2);
+
+  // Close
+  const closeSize = 22;
+  const closeX = x + w - PAD - closeSize;
+  const closeY = y + (HEADER_H - closeSize) / 2;
+  ctx.fillStyle = "rgba(255,255,255,0.10)";
+  ctx.fillRect(closeX, closeY, closeSize, closeSize);
+  ctx.fillStyle = "rgba(255,255,255,0.85)";
+  ctx.font = "16px sans-serif";
+  ctx.textAlign = "center";
+  ctx.fillText("×", closeX + closeSize / 2, closeY + closeSize / 2 + 1);
+  ctx.textAlign = "left";
+
+  const headerRect = { x, y, w, h: HEADER_H };
+  const closeRect = { x: closeX, y: closeY, w: closeSize, h: closeSize };
+
+  // Content area
+  const contentX = x + PAD;
+  const contentY = y + HEADER_H + PAD;
+  const contentW = w - PAD * 2;
+  const contentH = h - HEADER_H - PAD * 2;
+
+  // Build list of discovered mobs
+  const discovered = Object.keys(monsterBook || {}).filter(k => (monsterBook[k]?.kills ?? 0) > 0);
+  discovered.sort((a, b) => {
+    const an = (mobCatalog?.[a]?.name || a);
+    const bn = (mobCatalog?.[b]?.name || b);
+    return an.localeCompare(bn);
+  });
+
+  const rowH = 74;
+  const totalH = discovered.length * rowH;
+  const maxScroll = Math.max(0, totalH - contentH);
+  bookScrollY = clamp(bookScrollY, 0, maxScroll);
+
+  // clip content
+  ctx.save();
+  ctx.beginPath();
+  ctx.rect(contentX, contentY, contentW, contentH);
+  ctx.clip();
+
+  const items = [];
+
+  let yy = contentY - bookScrollY;
+  for (const mobType of discovered) {
+    const cat = mobCatalog?.[mobType] || {};
+    const nm = cat.name || mobType;
+    const maxHp = cat.maxHp ?? 0;
+    const dmg = cat.damage ?? 0;
+    const kills = monsterBook?.[mobType]?.kills ?? 0;
+
+    // row bg
+    ctx.fillStyle = "rgba(255,255,255,0.04)";
+    ctx.fillRect(contentX, yy, contentW, rowH - 8);
+    ctx.strokeStyle = "rgba(255,255,255,0.10)";
+    ctx.strokeRect(contentX, yy, contentW, rowH - 8);
+
+    // left icon area (simple)
+    const iconBox = 46;
+    const ix = contentX + 10;
+    const iy = yy + 10;
+    ctx.fillStyle = "rgba(0,0,0,0.35)";
+    ctx.fillRect(ix, iy, iconBox, iconBox);
+
+    // mob still image (if available) — first frame only
+    const mobImg = (typeof mobSprites !== "undefined") ? (mobSprites[mobType] || null) : null;
+    if (mobImg && mobImg.complete && mobImg.naturalWidth > 0) {
+      // Your mob spritesheets are 3 columns x 4 direction rows. Show the very first frame (col 0, row 0).
+      const { w: fw, h: fh } = getMobFrameSize(mobImg);
+      const sx = 0;
+      const sy = 0;
+      ctx.drawImage(mobImg, sx, sy, fw, fh, ix + 4, iy + 4, iconBox - 8, iconBox - 8);
+    } else {
+      // fallback: first letter
+      ctx.fillStyle = "rgba(255,255,255,0.80)";
+      ctx.font = "18px sans-serif";
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      ctx.fillText((nm || "?").slice(0, 1).toUpperCase(), ix + iconBox / 2, iy + iconBox / 2);
+      ctx.textAlign = "left";
+      ctx.textBaseline = "top";
+    }
+
+
+    // name + stats
+    ctx.fillStyle = "rgba(255,255,255,0.92)";
+    ctx.font = "16px sans-serif";
+    ctx.textBaseline = "top";
+    ctx.fillText(nm, ix + iconBox + 12, yy + 10);
+
+    ctx.fillStyle = "rgba(255,255,255,0.75)";
+    ctx.font = "13px sans-serif";
+    ctx.fillText(`HP: ${maxHp}   ATK: ${dmg}   Defeated: ${kills}`, ix + iconBox + 12, yy + 32);
+
+    // drops
+    const drops = Array.isArray(cat.drops) ? cat.drops : [];
+    const dx0 = ix + iconBox + 12;
+    let dx = dx0;
+    const dy = yy + 52;
+
+    ctx.fillStyle = "rgba(255,255,255,0.65)";
+    ctx.font = "12px sans-serif";
+    ctx.fillText("Drops:", dx, dy);
+    dx += 44;
+
+    for (let di = 0; di < Math.min(drops.length, 10); di++) {
+      const d = drops[di];
+      const itemId = d?.itemId || "coin";
+      const img = equipIcons?.[itemId] || null;
+
+      const sz = 18;
+      const bx = dx;
+      const by = dy - 3;
+
+      ctx.fillStyle = "rgba(0,0,0,0.30)";
+      ctx.fillRect(bx, by, sz, sz);
+
+      if (img && img.complete && img.naturalWidth > 0) {
+        ctx.drawImage(img, bx + 1, by + 1, sz - 2, sz - 2);
+      } else {
+        // coin / missing icon fallback
+        ctx.fillStyle = "rgba(255,255,255,0.75)";
+        ctx.font = "10px sans-serif";
+        ctx.textAlign = "center";
+        ctx.textBaseline = "middle";
+        ctx.fillText(itemId === "coin" ? "¢" : "?", bx + sz / 2, by + sz / 2);
+        ctx.textAlign = "left";
+        ctx.textBaseline = "top";
+      }
+
+      // chance label
+      const chance = typeof d?.chance === "number" ? d.chance : 0;
+      const pct = Math.round(chance * 100);
+      ctx.fillStyle = "rgba(255,255,255,0.65)";
+      ctx.font = "10px sans-serif";
+      ctx.textBaseline = "top";
+      ctx.fillText(`${pct}%`, bx + sz + 4, by + 4);
+
+      dx += 56;
+      if (dx > contentX + contentW - 70) break;
+    }
+
+    items.push({ mobType, rect: { x: contentX, y: yy, w: contentW, h: rowH - 8 } });
+
+    yy += rowH;
+  }
+
+  if (discovered.length === 0) {
+    ctx.fillStyle = "rgba(255,255,255,0.85)";
+    ctx.font = "15px sans-serif";
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.fillText("Defeat a monster to unlock an entry.", contentX + contentW / 2, contentY + contentH / 2);
+    ctx.textAlign = "left";
+  }
+
+  ctx.restore(); // clip
+  ctx.restore();
+
+  // expose hit-test data
+  bookUI = {
+    x, y, w, h,
+    close: closeRect,
+    header: headerRect,
+    content: { x: contentX, y: contentY, w: contentW, h: contentH },
+    items,
+    maxScroll,
+  };
+
+  bookCloseRect = closeRect;
+  bookHeaderRect = headerRect;
+}
+
+
 ws.onmessage = (e) => {
   const msg = JSON.parse(e.data);
 
@@ -2032,6 +2347,12 @@ ws.onmessage = (e) => {
   }
   if (msg.type === "nameAccepted") {
     myName = msg.name || myName;
+    return;
+  }
+
+
+  if (msg.type === "hotbarState") {
+    hotbarSlots = sanitizeHotbarSlots(msg.slots);
     return;
   }
 
@@ -2055,6 +2376,29 @@ ws.onmessage = (e) => {
 
     if (typeof msg.tileSize === "number") TILE_SIZE = msg.tileSize;
     if (typeof msg.portalTile === "number") PORTAL_TILE = msg.portalTile;
+    if (msg.mobCatalog && typeof msg.mobCatalog === "object") mobCatalog = msg.mobCatalog;
+    if (msg.monsterBook && typeof msg.monsterBook === "object") monsterBook = msg.monsterBook;
+    return;
+  }
+
+
+  if (msg.type === "monsterBookUpdate") {
+    const mobType = String(msg.mobType || "");
+    if (!mobType) return;
+    if (msg.entry && typeof msg.entry === "object") {
+      monsterBook[mobType] = msg.entry;
+    } else {
+      monsterBook[mobType] = { kills: (monsterBook[mobType]?.kills ?? 0) + 1 };
+    }
+    if (msg.isNew) {
+      const nm = mobCatalog?.[mobType]?.name || mobType;
+      hotbarToast(`New Monster Book Entry: ${nm}`, 1600);
+    }
+    return;
+  }
+
+  if (msg.type === "monsterBook") {
+    if (msg.book && typeof msg.book === "object") monsterBook = msg.book;
     return;
   }
 
@@ -2075,6 +2419,8 @@ ws.onmessage = (e) => {
     if (msg.objMap) objMap = msg.objMap;
 
 if (Array.isArray(msg.whirlpools)) whirlpools = msg.whirlpools;
+    if (msg.selfMonsterBook && typeof msg.selfMonsterBook === "object") monsterBook = msg.selfMonsterBook;
+
 
     // Skill 1 timers for local HUD/hotbar
     const _nowAbs = serverNowMs();
@@ -2549,6 +2895,16 @@ window.addEventListener("keydown", (e) => {
     return;
   }
 
+
+  // Toggle Monster Book
+  if (k === "b") {
+    e.preventDefault();
+    if (!e.repeat) {
+      if (typeof setMainMenuOpen === "function") setMainMenuOpen(false);
+      toggleMonsterBook();
+    }
+    return;
+  }
   // Toggle Inventory
   if (k === "i") {
     e.preventDefault();
@@ -2559,6 +2915,14 @@ window.addEventListener("keydown", (e) => {
     return;
   }
 
+
+  // Escape closes Monster Book
+  if (key === "Escape" && monsterBookOpen) {
+    e.preventDefault();
+    monsterBookOpen = false;
+    bookDragging = false;
+    return;
+  }
   // Hotbar 1..6 (use or bind)
   if (k >= "1" && k <= "6") {
     e.preventDefault();
@@ -2846,6 +3210,35 @@ window.addEventListener("mousemove", (e) => {
 });
 
 
+
+canvas.addEventListener("mousedown", (e) => {
+  if (!monsterBookOpen || !bookUI) return;
+
+  // Monster Book consumes clicks so they don't trigger attacks.
+  e.preventDefault();
+  e.stopImmediatePropagation();
+
+  const rect = canvas.getBoundingClientRect();
+  const mx = e.clientX - rect.left;
+  const my = e.clientY - rect.top;
+
+  // close button
+  if (bookCloseRect && mx >= bookCloseRect.x && mx <= bookCloseRect.x + bookCloseRect.w && my >= bookCloseRect.y && my <= bookCloseRect.y + bookCloseRect.h) {
+    monsterBookOpen = false;
+    bookDragging = false;
+    return;
+  }
+
+  // drag header
+  if (bookHeaderRect && mx >= bookHeaderRect.x && mx <= bookHeaderRect.x + bookHeaderRect.w && my >= bookHeaderRect.y && my <= bookHeaderRect.y + bookHeaderRect.h) {
+    bookDragging = true;
+    bookDragOffX = mx - bookWinX;
+    bookDragOffY = my - bookWinY;
+    return;
+  }
+});
+
+
 // Click-to-attack (left mouse button). Determines attack direction by click quadrant.
 // For wand, the click position determines projectile trajectory (server computes direction).
 canvas.addEventListener("mousedown", (e) => {
@@ -2883,9 +3276,41 @@ canvas.addEventListener("mousedown", (e) => {
 });
 
 
+
+window.addEventListener("mousemove", (e) => {
+  if (!monsterBookOpen || !bookDragging) return;
+  const rect = canvas.getBoundingClientRect();
+  const mx = e.clientX - rect.left;
+  const my = e.clientY - rect.top;
+
+  bookWinX = Math.round(mx - bookDragOffX);
+  bookWinY = Math.round(my - bookDragOffY);
+
+  // keep on-screen
+  bookWinX = clamp(bookWinX, 8, canvas.width - bookWinW - 8);
+  bookWinY = clamp(bookWinY, 8, canvas.height - bookWinH - 8);
+});
+
+
+
+window.addEventListener("wheel", (e) => {
+  if (!monsterBookOpen || !bookUI) return;
+  const rect = canvas.getBoundingClientRect();
+  const mx = e.clientX - rect.left;
+  const my = e.clientY - rect.top;
+  const c = bookUI.content;
+  if (!c) return;
+  if (mx >= c.x && mx <= c.x + c.w && my >= c.y && my <= c.y + c.h) {
+    e.preventDefault();
+    bookScrollY = clamp(bookScrollY + e.deltaY, 0, bookUI.maxScroll || 0);
+  }
+}, { passive: false });
+
+
 window.addEventListener("mouseup", () => {
   invDragging = false;
   skillsDragging = false;
+  bookDragging = false;
 });
 
 /* ======================
@@ -3686,7 +4111,7 @@ function drawCoin(x, y, amount) {
   ctx.restore();
 }
 
-const itemSprites = {
+var itemSprites = {
   orange_flan: new Image(),
   potion_green: new Image(),
   potion_purple: new Image(),
@@ -5193,6 +5618,12 @@ drawSprite(bodySprite, drawX, drawY, renderDir, bodyFrame, bodyFW, bodyFH);
     skillsUI = null;
   }
 
+
+  if (monsterBookOpen) {
+    drawMonsterBook();
+  } else {
+    bookUI = null;
+  }
   drawLevelToast();
 
   }
