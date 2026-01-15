@@ -345,13 +345,35 @@ const MOB_RADIUS = 16;
 // Tune these numbers for gameplay feel (server-authoritative).
 const MOB_DEFS = {
   // Keep all mob tuning in one place: stats, rewards, collision, behavior.
-  green: { radius: 28, maxHp: 50,  damage: 15, xp: 1, passiveUntilHit: true },
-  pink: { radius: 28, maxHp: 80,  damage: 20, xp: 1, passiveUntilHit: true },
-  orange: { radius: 28, maxHp: 120, damage: 20, xp: 1, passiveUntilHit: true },
-  purple: { radius: 28, maxHp: 150, damage: 25, xp: 1, passiveUntilHit: true },
-  rainbow: { radius: 28, maxHp: 300, damage: 35, xp: 1, passiveUntilHit: true },
-  snail_blue: { radius: 28, maxHp: 180, damage: 30, xp: 1, passiveUntilHit: true },
-  snail_red: { radius: 28, maxHp: 220, damage: 35, xp: 1, passiveUntilHit: true },
+  // Knockback tuning is per-mob so heavier mobs are harder to shove around.
+  green: {
+    radius: 28, maxHp: 50,  damage: 15, xp: 1, passiveUntilHit: true,
+    knockbackThreshold: 10, knockbackDist: 110,
+  },
+  pink: {
+    radius: 28, maxHp: 80,  damage: 20, xp: 1, passiveUntilHit: true,
+    knockbackThreshold: 12, knockbackDist: 105,
+  },
+  orange: {
+    radius: 28, maxHp: 120, damage: 20, xp: 1, passiveUntilHit: true,
+    knockbackThreshold: 15, knockbackDist: 100,
+  },
+  purple: {
+    radius: 28, maxHp: 150, damage: 25, xp: 1, passiveUntilHit: true,
+    knockbackThreshold: 18, knockbackDist: 95,
+  },
+  rainbow: {
+    radius: 28, maxHp: 300, damage: 35, xp: 1, passiveUntilHit: true,
+    knockbackThreshold: 25, knockbackDist: 90,
+  },
+  snail_blue: {
+    radius: 28, maxHp: 180, damage: 30, xp: 1, passiveUntilHit: true,
+    knockbackThreshold: 22, knockbackDist: 85,
+  },
+  snail_red: {
+    radius: 28, maxHp: 220, damage: 35, xp: 1, passiveUntilHit: true,
+    knockbackThreshold: 28, knockbackDist: 80,
+  },
 };
 
 // Aggro tuning
@@ -732,11 +754,11 @@ potion_purple: {
 
   
   // equipment (MapleStory-style)
-  training_sword: { id: "training_sword", name: "Training Sword", type: "weapon", slot: "weapon", weaponKey: "sword", maxStack: 1 , weaponSpeed: 1.75 },
+  training_sword: { id: "training_sword", name: "Training Sword", type: "weapon", slot: "weapon", weaponKey: "sword", maxStack: 1 , weaponSpeed: 1.5 },
   training_spear: { id: "training_spear", name: "Training Spear", type: "weapon", slot: "weapon", weaponKey: "spear", maxStack: 1 , weaponSpeed: 1.5 },
-  candy_cane_spear: { id: "candy_cane_spear", name: "North Pole", type: "weapon", slot: "weapon", weaponKey: "spear", maxStack: 1 , weaponSpeed: 1.75 },
+  candy_cane_spear: { id: "candy_cane_spear", name: "North Pole", type: "weapon", slot: "weapon", weaponKey: "spear", maxStack: 1 , weaponSpeed: 3 },
   fang_spear:       { id: "fang_spear",       name: "Twin Fang",       type: "weapon", slot: "weapon", weaponKey: "spear", maxStack: 1 , weaponSpeed: 1.5 },
-  training_wand:  { id: "training_wand",  name: "Training Wand",  type: "weapon", slot: "weapon", weaponKey: "wand",  maxStack: 1 , weaponSpeed: 1 },
+  training_wand:  { id: "training_wand",  name: "Training Wand",  type: "weapon", slot: "weapon", weaponKey: "wand",  maxStack: 1 , weaponSpeed: 1.2 },
   cloth_armor:   { id: "cloth_armor",   name: "Apprentice Robe",   type: "armor",     slot: "armor",     maxStack: 1 },
   charger_suit: { id: "charger_suit", name: "Charger Suit", type: "armor", slot: "armor", maxStack: 1 },
   cloth_hat:     { id: "cloth_hat",     name: "Apprentice Hat",     type: "hat",       slot: "hat",       maxStack: 1 },
@@ -836,6 +858,31 @@ function swordHitTest(p, m) {
     const cx = p.x + f.x * t.forward + perp.x * t.side;
     const cy = p.y + f.y * t.forward + perp.y * t.side;
     if (dist(cx, cy, m.x, m.y) <= (t.rad + mr)) return true;
+  }
+  return false;
+}
+
+function swordHitTestSkill4(p, m) {
+  // Wide sword slash for Skill 4: same pattern as swordHitTest but with extra reach.
+  const f = norm(p.facing || { x: 0, y: 1 });
+  const perp = { x: -f.y, y: f.x };
+
+  const mr = (m && Number.isFinite(m.radius)) ? m.radius : MOB_RADIUS;
+  const RANGE_MUL = (typeof SKILL4_RANGE_MULT === "number" ? SKILL4_RANGE_MULT : 1.35);
+
+  const tests = [
+    { forward: 32, side: 0,  rad: 38 },
+    { forward: 28, side: 14, rad: 34 },
+    { forward: 28, side: -14, rad: 34 },
+  ];
+
+  for (const t of tests) {
+    const fwd = t.forward * RANGE_MUL;
+    const side = t.side * RANGE_MUL * 0.9;
+    const rad = t.rad * RANGE_MUL;
+    const cx = p.x + f.x * fwd + perp.x * side;
+    const cy = p.y + f.y * fwd + perp.y * side;
+    if (dist(cx, cy, m.x, m.y) <= (rad + mr)) return true;
   }
   return false;
 }
@@ -989,6 +1036,11 @@ function spawnMob(id, mapId, opts = {}) {
     passiveUntilHit: (typeof opts.passiveUntilHit === "boolean") ? opts.passiveUntilHit : !!(MOB_DEFS[mobType]?.passiveUntilHit),
     aggroTargetId: null,
     aggroUntil: 0,
+
+    // Knockback tuning (per-mob, with overrides via MOB_DEFS / spawn opts)
+    knockbackThreshold: opts.knockbackThreshold ?? (MOB_DEFS[mobType]?.knockbackThreshold ?? BIG_KNOCKBACK_THRESHOLD),
+    knockbackDist: opts.knockbackDist ?? (MOB_DEFS[mobType]?.knockbackDist ?? BIG_KNOCKBACK_DIST),
+
     // Aggro tuning (can be overridden per mob type/spawn)
     baseAggroRange: opts.baseAggroRange ?? MOB_BASE_AGGRO,
     hitAggroRange:  opts.hitAggroRange  ?? MOB_HIT_AGGRO,
@@ -1109,6 +1161,8 @@ wss.on("connection", (ws) => {
     xp: 0,
     xpNext: xpToNext(1),
     atk: 10,
+    // Basic attack can hit this many mobs (mastery can raise this)
+    basicHitCap: 1,
     hp: 100,
     maxHp: 100,
 
@@ -1136,11 +1190,14 @@ kills: 0, completed: false, rewarded: false } },
 skill1ActiveUntilMs: 0,
 skill1CdUntilMs: 0,
 skill2CdUntilMs: 0,
+skill3CdUntilMs: 0,
+skill4CdUntilMs: 0,
 
 // combat timers
 
     atkAnim: 0,
     atkCd: 0,
+    atkKind: null,
     invuln: 0,
 
     // portal anti-loop (ms timestamp). We now spawn ON portal tiles, so we prevent instant re-use.
@@ -1212,7 +1269,7 @@ ws.on("message", async (buf) => {
         if (s.type === "skill" && typeof s.id === "string") {
           // Allow only known skills (extend this list as you add more)
           const sid = s.id;
-          if (sid === "skill1" || sid === "skill2") out[i] = { type: "skill", id: sid };
+          if (sid === "skill1" || sid === "skill2" || sid === "skill3" || sid === "skill4") out[i] = { type: "skill", id: sid };
           else out[i] = null;
           continue;
         }
@@ -1407,10 +1464,13 @@ if (msg.type === "skill2DoubleStab") {
       if (meleeHitTestDir(p, m, dir, OFFSET, RADIUS)) {
         const dmg = Math.max(1, Math.floor(p.atk * 0.9));
         m.hp -= dmg;
+        m.lastHitBy = p.id;
 
-        // Aggro mobs on hit (same as regular spear)
-        m.aggroTarget = p.id;
-        m.aggroT = 7.0;
+        // Big knockback if this single hit is strong enough.
+        maybeBigKnockback(m, p.x, p.y, dmg);
+
+        // Aggro mobs on hit (server-wide aggro system)
+        setMobAggro(m, p.id);
 
         // Combat text / hit FX (match regular attacks: client listens for type:"hit")
         broadcastToMap(p.mapId, {
@@ -1443,6 +1503,282 @@ if (msg.type === "skill2DoubleStab") {
   send(ws, { type: "skill2Accepted", cdUntilMs: p.skill2CdUntilMs });
   return;
 }
+
+
+// ===== Skill 3: Dash Slash (sword-only) =====
+// A short dash in your aimed direction, then a strong sword slash at the end.
+// Uses cardinal directions (like your other melee) and stops early if you hit a wall/object.
+if (msg.type === "skill3DashSlash") {
+  if (p.hp <= 0 || p.respawnIn > 0) return;
+
+  // Must have a sword equipped
+  const equippedWeaponId = p.equipment?.weapon;
+  const equippedDef = equippedWeaponId ? ITEMS[equippedWeaponId] : null;
+  const weaponKey = equippedDef?.weaponKey || null;
+  if (weaponKey !== "sword") {
+    send(ws, { type: "skill3Rejected", reason: "Equip a sword to use Skill 3." });
+    return;
+  }
+
+  const nowMs = Date.now();
+  if (nowMs < (p.skill3CdUntilMs || 0)) {
+    send(ws, { type: "skill3Rejected", reason: "Skill 3 is on cooldown." });
+    return;
+  }
+
+  const startMs = nowMs;
+  p.skill3CdUntilMs = startMs + SKILL3_COOLDOWN_MS;
+
+  // Optional aim from client; snap to cardinal direction
+  const aimDirX = Number(msg.aimDirX);
+  const aimDirY = Number(msg.aimDirY);
+  const hasAimDir =
+    Number.isFinite(aimDirX) &&
+    Number.isFinite(aimDirY) &&
+    (Math.abs(aimDirX) + Math.abs(aimDirY) > 1e-6);
+
+  const aimX = Number(msg.aimX);
+  const aimY = Number(msg.aimY);
+  const hasAim = Number.isFinite(aimX) && Number.isFinite(aimY);
+
+  if (hasAimDir) {
+    const dx = aimDirX;
+    const dy = aimDirY;
+    const ax = Math.abs(dx);
+    const ay = Math.abs(dy);
+    if (ax > ay) p.facing = { x: dx >= 0 ? 1 : -1, y: 0 };
+    else if (ay > 0) p.facing = { x: 0, y: dy >= 0 ? 1 : -1 };
+  } else if (hasAim) {
+    const dx = aimX - p.x;
+    const dy = aimY - p.y;
+    const ax = Math.abs(dx);
+    const ay = Math.abs(dy);
+    if (ax > ay) p.facing = { x: dx >= 0 ? 1 : -1, y: 0 };
+    else if (ay > 0) p.facing = { x: 0, y: dy >= 0 ? 1 : -1 };
+  }
+
+  // Cache a discrete attack direction for clients (used for rendering during atkAnim)
+  {
+    const fx = p.facing?.x ?? 0;
+    const fy = p.facing?.y ?? 0;
+    const ax = Math.abs(fx);
+    const ay = Math.abs(fy);
+    if (ax > ay) p.atkDir = (fx >= 0 ? "right" : "left");
+    else if (ay > 0) p.atkDir = (fy >= 0 ? "down" : "up");
+  }
+
+  const fromX = p.x;
+  const fromY = p.y;
+
+  // Dash contact damage: as you pass through/near mobs during the dash, apply a small hit once per mob.
+  // This makes the skill feel reliable even if you end up on the far side of a target.
+  const dashHitMobIds = new Set();
+  const dashDmg = Math.max(1, Math.floor(p.atk * SKILL3_DASH_DAMAGE_MULT));
+
+  // Dash forward in small steps so we don't "phase" through walls.
+  const f = norm(p.facing || { x: 0, y: 1 });
+  const step = SKILL3_DASH_DIST_PX / SKILL3_DASH_STEPS;
+  for (let i = 0; i < SKILL3_DASH_STEPS; i++) {
+    const nx = p.x + f.x * step;
+    const ny = p.y + f.y * step;
+    if (collidesPlayer(p.mapId, nx, ny)) break;
+    p.x = nx;
+    p.y = ny;
+
+    // Apply small contact damage during the dash (once per mob) so you don't harmlessly pass through.
+    // Uses a simple overlap check (player foot radius + mob radius + padding).
+    for (const m of mobs.values()) {
+      if (m.mapId !== p.mapId) continue;
+      if (m.respawnIn > 0) continue;
+      if (m.hp <= 0) continue;
+      if (dashHitMobIds.has(m.id)) continue;
+
+      const mr = (m && Number.isFinite(m.radius)) ? m.radius : MOB_RADIUS;
+      const hitRad = PLAYER_FOOT_RADIUS + mr + SKILL3_DASH_CONTACT_PAD;
+      if (dist(p.x, p.y, m.x, m.y) <= hitRad) {
+        dashHitMobIds.add(m.id);
+        m.hp -= dashDmg;
+        m.lastHitBy = p.id;
+
+        // Big knockback if this single hit is strong enough.
+        maybeBigKnockback(m, p.x, p.y, dashDmg);
+
+        setMobAggro(m, p.id);
+
+        broadcastToMap(p.mapId, {
+          type: "hit",
+          targetId: m.id,
+          targetKind: "mob",
+          srcX: p.x,
+          srcY: p.y,
+          amount: dashDmg,
+          fx: "dash",
+        });
+
+        if (m.hp <= 0) killMobAndReward(m, p.id);
+      }
+    }
+  }
+  clampToWorldPlayer(p.mapId, p);
+
+  // Animate + briefly lock out normal attacks
+  p.atkAnim = Math.max(p.atkAnim || 0, SKILL3_ATK_ANIM);
+  // Dash Slash uses the normal sword visuals
+  p.atkKind = null;
+  p.atkCd = Math.max(p.atkCd || 0, SKILL3_ATK_LOCK_SEC);
+
+  // Apply a stronger sword slash at the end of the dash
+  const dmg = Math.max(1, Math.floor(p.atk * SKILL3_DAMAGE_MULT));
+  for (const m of mobs.values()) {
+    if (m.mapId !== p.mapId) continue;
+    if (m.respawnIn > 0) continue;
+    if (m.hp <= 0) continue;
+
+    if (swordHitTest(p, m)) {
+      m.hp -= dmg;
+      m.lastHitBy = p.id;
+
+      setMobAggro(m, p.id);
+
+      broadcastToMap(p.mapId, {
+        type: "hit",
+        targetId: m.id,
+        targetKind: "mob",
+        srcX: p.x,
+        srcY: p.y,
+        amount: dmg,
+        fx: "dashslash",
+      });
+
+      if (m.hp <= 0) killMobAndReward(m, p.id);
+    }
+  }
+
+  // Broadcast dash FX for visuals (optional client-side)
+  broadcastToMap(p.mapId, {
+    type: "skill3Fx",
+    casterId: p.id,
+    startMs,
+    from: { x: fromX, y: fromY },
+    to: { x: p.x, y: p.y },
+    dir: { x: p.facing?.x ?? 0, y: p.facing?.y ?? 1 },
+  });
+
+  send(ws, { type: "skill3Accepted", cdUntilMs: p.skill3CdUntilMs });
+  return;
+}
+
+if (msg.type === "skill4WideSlash") {
+  if (p.hp <= 0 || p.respawnIn > 0) return;
+
+  // Must have a sword equipped
+  const equippedWeaponId = p.equipment?.weapon;
+  const equippedDef = equippedWeaponId ? ITEMS[equippedWeaponId] : null;
+  const weaponKey = equippedDef?.weaponKey || null;
+  if (weaponKey !== "sword") {
+    send(ws, { type: "skill4Rejected", reason: "Equip a sword to use Skill 4." });
+    return;
+  }
+
+  const nowMs = Date.now();
+  if (nowMs < (p.skill4CdUntilMs || 0)) {
+    send(ws, { type: "skill4Rejected", reason: "Skill 4 is on cooldown." });
+    return;
+  }
+
+  const startMs = nowMs;
+  p.skill4CdUntilMs = startMs + SKILL4_COOLDOWN_MS;
+
+  // Aim direction, same rules as basic attack: prefer aimDirX/aimDirY, fall back to aimX/aimY.
+  const aimDirX = Number(msg.aimDirX);
+  const aimDirY = Number(msg.aimDirY);
+  const hasAimDir =
+    Number.isFinite(aimDirX) &&
+    Number.isFinite(aimDirY) &&
+    (Math.abs(aimDirX) + Math.abs(aimDirY) > 1e-6);
+
+  const aimX = Number(msg.aimX);
+  const aimY = Number(msg.aimY);
+  const hasAim = Number.isFinite(aimX) && Number.isFinite(aimY);
+
+  if (hasAimDir) {
+    const dx = aimDirX;
+    const dy = aimDirY;
+    const ax = Math.abs(dx);
+    const ay = Math.abs(dy);
+    if (ax > ay) p.facing = { x: dx >= 0 ? 1 : -1, y: 0 };
+    else if (ay > 0) p.facing = { x: 0, y: dy >= 0 ? 1 : -1 };
+  } else if (hasAim) {
+    const dx = aimX - p.x;
+    const dy = aimY - p.y;
+    if (Math.abs(dx) + Math.abs(dy) > 1e-6) {
+      const ax = Math.abs(dx);
+      const ay = Math.abs(dy);
+      if (ax > ay) p.facing = { x: dx >= 0 ? 1 : -1, y: 0 };
+      else p.facing = { x: 0, y: dy >= 0 ? 1 : -1 };
+    }
+  }
+
+  // Cache a discrete attack direction for clients (used for rendering during atkAnim)
+  {
+    const fx = p.facing?.x ?? 0;
+    const fy = p.facing?.y ?? 0;
+    const ax = Math.abs(fx);
+    const ay = Math.abs(fy);
+    if (ax > ay) p.atkDir = (fx >= 0 ? "right" : "left");
+    else if (ay > 0) p.atkDir = (fy >= 0 ? "down" : "up");
+  }
+
+  // Animate sword swing with a slightly longer arc
+  p.atkAnim = Math.max(p.atkAnim || 0, SKILL4_ATK_ANIM);
+  p.atkKind = "skill4";
+
+  // Apply hits: up to SKILL4_MAX_HITS mobs using the extended sword test
+  let hits = 0;
+  const dmg = p.atk;
+
+  const candidates = [];
+  for (const m of mobs.values()) {
+    if (m.mapId !== p.mapId) continue;
+    if (m.respawnIn > 0) continue;
+    if (m.hp <= 0) continue;
+    if (!swordHitTestSkill4(p, m)) continue;
+
+    const dx = m.x - p.x;
+    const dy = m.y - p.y;
+    candidates.push({ m, d2: dx * dx + dy * dy });
+  }
+
+  // Prioritize the closest mobs so visuals feel natural
+  candidates.sort((a, b) => a.d2 - b.d2);
+
+  for (const { m } of candidates) {
+    if (hits >= SKILL4_MAX_HITS) break;
+    hits++;
+
+    m.hp -= dmg;
+    m.lastHitBy = p.id;
+
+    maybeBigKnockback(m, p.x, p.y, dmg);
+    setMobAggro(m, p.id);
+
+    broadcastToMap(p.mapId, {
+      type: "hit",
+      targetId: m.id,
+      targetKind: "mob",
+      srcX: p.x,
+      srcY: p.y,
+      amount: dmg,
+      fx: "bigslash",
+    });
+
+    if (m.hp <= 0) killMobAndReward(m, p.id);
+  }
+
+  send(ws, { type: "skill4Accepted", cdUntilMs: p.skill4CdUntilMs });
+  return;
+}
+
 
     if (msg.type === "invClick") {
       if (p.hp <= 0 || p.respawnIn > 0) return;
@@ -1683,6 +2019,8 @@ if (msg.type === "skill2DoubleStab") {
       if (weaponKey !== "wand" && p.skill1Primed) p.skill1Primed = false;
       // shared animation time (client uses this for sword/spear/wand “active”)
       p.atkAnim = 0.18;
+      // Default attack kind is a normal/basic swing (no special visuals)
+      p.atkKind = null;
 
       // weapon cooldowns (anti-spam)
       // NOTE: This is the *authoritative* lockout. The client should only animate when it sees atkAnim > 0 in snapshots.
@@ -1743,35 +2081,50 @@ if (hasAimDir) {
 
 // SWORD: wide slash hitbox
       if (weaponKey === "sword") {
+        // Basic attacks normally hit 1 target; mastery can raise p.basicHitCap to 2/3/4...
+        const hitCap = Math.max(1, p.basicHitCap ?? 1);
 
+        const candidates = [];
         for (const m of mobs.values()) {
           if (m.mapId !== p.mapId) continue;
           if (m.respawnIn > 0) continue;
           if (m.hp <= 0) continue;
 
           if (swordHitTest(p, m)) {
-            m.hp -= p.atk;
-            m.lastHitBy = p.id;
+            const dx = m.x - p.x;
+            const dy = m.y - p.y;
+            candidates.push({ m, d2: dx * dx + dy * dy });
+          }
+        }
 
-            // Any mob you hit becomes "provoked" and will chase you even if you're outside base aggro.
-            // This fixes ranged wand hits from outside normal aggro range.
-            setMobAggro(m, p.id);
+        candidates.sort((a, b) => a.d2 - b.d2);
 
-            // Orange slimes (and other passive mobs) only start fighting after being hit.
+        let hits = 0;
+        for (const { m } of candidates) {
+          if (hits >= hitCap) break;
+          hits++;
 
-            broadcastToMap(p.mapId, {
-              type: "hit",
-              targetId: m.id,
-              targetKind: "mob",
-              srcX: p.x,
-              srcY: p.y,
-              amount: p.atk,
-              fx: "slash",
-            });
+          m.hp -= p.atk;
+          m.lastHitBy = p.id;
 
-            if (m.hp <= 0) {
-              killMobAndReward(m, p.id);
-            }
+          // Big knockback if this single hit is strong enough.
+          maybeBigKnockback(m, p.x, p.y, p.atk);
+
+          // Any mob you hit becomes "provoked" and will chase you even if you're outside base aggro.
+          setMobAggro(m, p.id);
+
+          broadcastToMap(p.mapId, {
+            type: "hit",
+            targetId: m.id,
+            targetKind: "mob",
+            srcX: p.x,
+            srcY: p.y,
+            amount: p.atk,
+            fx: "slash",
+          });
+
+          if (m.hp <= 0) {
+            killMobAndReward(m, p.id);
           }
         }
         return;
@@ -1782,31 +2135,50 @@ if (hasAimDir) {
         const OFFSET = 50;
         const RADIUS = 32;
 
+        // Basic attacks normally hit 1 target; mastery can raise p.basicHitCap to 2/3/4...
+        const hitCap = Math.max(1, p.basicHitCap ?? 1);
+
+        const candidates = [];
         for (const m of mobs.values()) {
           if (m.mapId !== p.mapId) continue;
           if (m.respawnIn > 0) continue;
           if (m.hp <= 0) continue;
 
           if (meleeHitTest(p, m, OFFSET, RADIUS)) {
-            const dmg = Math.max(1, Math.floor(p.atk * 0.9)); // slightly less than sword
-            m.hp -= dmg;
-            m.lastHitBy = p.id;
+            const dx = m.x - p.x;
+            const dy = m.y - p.y;
+            candidates.push({ m, d2: dx * dx + dy * dy });
+          }
+        }
 
-            setMobAggro(m, p.id);
+        candidates.sort((a, b) => a.d2 - b.d2);
 
-            broadcastToMap(p.mapId, {
-          type: "hit",
-          targetId: m.id,
-          targetKind: "mob",
-          srcX: p.x,
-          srcY: p.y,
-          amount: dmg,
-          fx: "stab",
-        });
+        let hits = 0;
+        for (const { m } of candidates) {
+          if (hits >= hitCap) break;
+          hits++;
 
-            if (m.hp <= 0) {
-              killMobAndReward(m, p.id);
-            }
+          const dmg = Math.max(1, Math.floor(p.atk * 0.9)); // slightly less than sword
+          m.hp -= dmg;
+          m.lastHitBy = p.id;
+
+          // Big knockback if this single hit is strong enough.
+          maybeBigKnockback(m, p.x, p.y, dmg);
+
+          setMobAggro(m, p.id);
+
+          broadcastToMap(p.mapId, {
+            type: "hit",
+            targetId: m.id,
+            targetKind: "mob",
+            srcX: p.x,
+            srcY: p.y,
+            amount: dmg,
+            fx: "stab",
+          });
+
+          if (m.hp <= 0) {
+            killMobAndReward(m, p.id);
           }
         }
         return;
@@ -1950,6 +2322,57 @@ const TICK_HZ = 30;
 // Movement collision can be slightly smaller than the mob's combat radius to reduce corner-sticking
 // without changing how "chunky" they feel for hits.
 const MOB_MOVE_RADIUS_MUL = 0.85;
+
+// Extra knockback when a single hit deals a big chunk of damage.
+// These are global defaults; each mob can override via MOB_DEFS or spawn opts.
+const BIG_KNOCKBACK_THRESHOLD = 15; // default damage threshold in a single hit
+const BIG_KNOCKBACK_DIST = 96;      // default how far to push mobs on a big hit (in px)
+
+function knockbackMobFrom(m, srcX, srcY, dist) {
+  if (!m || !Number.isFinite(dist) || dist <= 0) return;
+
+  let dx = m.x - srcX;
+  let dy = m.y - srcY;
+  const len = Math.hypot(dx, dy);
+
+  // If we're essentially on top of the source, just pick an arbitrary direction.
+  if (len < 1e-6) {
+    dx = 0;
+    dy = -1;
+  } else {
+    dx /= len;
+    dy /= len;
+  }
+
+  const moveRadius = (m && Number.isFinite(m.radius))
+    ? m.radius * MOB_MOVE_RADIUS_MUL
+    : MOB_RADIUS * MOB_MOVE_RADIUS_MUL;
+
+  // Uses the existing slide / corner-hugging logic so we don't shove mobs into walls.
+  moveMobWithSlide(m, dx * dist, dy * dist, moveRadius);
+}
+
+function maybeBigKnockback(m, srcX, srcY, dmg) {
+  if (!m) return;
+  if (!Number.isFinite(dmg)) return;
+
+  // Allow per-mob tuning with sensible fallbacks.
+  const def = m.mobType ? (MOB_DEFS[m.mobType] || null) : null;
+
+  const threshold =
+    Number.isFinite(m.knockbackThreshold) ? m.knockbackThreshold :
+    def && Number.isFinite(def.knockbackThreshold) ? def.knockbackThreshold :
+    BIG_KNOCKBACK_THRESHOLD;
+
+  const dist =
+    Number.isFinite(m.knockbackDist) ? m.knockbackDist :
+    def && Number.isFinite(def.knockbackDist) ? def.knockbackDist :
+    BIG_KNOCKBACK_DIST;
+
+  if (dmg < threshold) return;
+  knockbackMobFrom(m, srcX, srcY, dist);
+}
+
 
 // Try to move using axis-separated slide; if blocked, optionally "hug" corners by trying a perpendicular step.
 function moveMobWithSlide(m, stepX, stepY, radius, target = null) {
@@ -2100,11 +2523,18 @@ function tickStep(dt) {
 
         if (dist(pr.x, pr.y, m.x, m.y) <= (pr.rad + (m.radius ?? MOB_RADIUS))) {
           // Skill-shot projectiles should not also deal normal wand damage.
-          const hitDmg = pr.skill1 ? 0 : pr.damage;
+          const isSkill1Shot = !!pr.skill1;
+          const hitDmg = isSkill1Shot ? 0 : pr.damage;
           if (hitDmg > 0) m.hp -= hitDmg;
           m.lastHitBy = pr.ownerId;
 
-          setMobAggro(m, pr.ownerId);
+          // Big knockback if this single hit is strong enough (normal wand bolts only).
+          if (hitDmg > 0) {
+            maybeBigKnockback(m, pr.x, pr.y, hitDmg);
+          }
+
+          // Skill 1 should NOT provoke/aggro mobs. Normal hits still do.
+          if (!isSkill1Shot) setMobAggro(m, pr.ownerId);
 
           // If this projectile was a primed Skill 1 shot, start the whirlpool ONLY on a successful mob hit.
           if (pr.skill1) {
@@ -2349,6 +2779,22 @@ const SKILL2_ATK_ANIM = 0.14;       // shorter than normal attack anim
 const SKILL2_SPEAR_OFFSET = 58;     // base spear OFFSET(50) + bonus reach
 const SKILL2_SPEAR_RADIUS = 38;     // base spear RADIUS(32) + bonus hitbox
 const SKILL2_JUT_ANGLE = Math.PI / 28; // ~6.4 degrees
+// ===== Skill 3: Dash Slash (sword-only) =====
+const SKILL3_COOLDOWN_MS = 4_500;
+const SKILL3_DASH_DIST_PX = 130;
+const SKILL3_DASH_STEPS = 10;         // higher = safer vs wall phasing
+const SKILL3_DASH_DAMAGE_MULT = 0.55; // smaller "contact" damage while dashing through enemies
+const SKILL3_DASH_CONTACT_PAD = 6;    // extra pixels added to contact radius to make hits feel reliable
+const SKILL3_DAMAGE_MULT = 1.35;      // damage multiplier vs normal sword hit
+const SKILL3_ATK_ANIM = 0.20;         // visual swing time (seconds)
+const SKILL3_ATK_LOCK_SEC = 0.28;     // short lockout so you can't instantly chain basics
+
+// ===== Skill 4: Wide Slash (sword-only, bigger arc) =====
+const SKILL4_COOLDOWN_MS = 7_000;
+const SKILL4_ATK_ANIM = 0.24;
+const SKILL4_MAX_HITS = 3;
+const SKILL4_RANGE_MULT = 1.35;
+
 setInterval(() => {
   for (const ws of wss.clients) {
     if (ws.readyState !== 1) continue;
@@ -2370,6 +2816,7 @@ setInterval(() => {
         level: p.level, xp: p.xp, xpNext: p.xpNext,
         atkAnim: p.atkAnim,
         atkDir: p.atkDir,
+        atkKind: p.atkKind || null,
         facing: p.facing,
         gold: p.gold,
         weapon: p.weapon,
@@ -2438,6 +2885,8 @@ whirlpools: Array.from(whirlpools.values())
 selfSkill1ActiveUntilMs: (players.get(socketToId.get(ws))?.skill1ActiveUntilMs) || 0,
 selfSkill1CdUntilMs: (players.get(socketToId.get(ws))?.skill1CdUntilMs) || 0,
 selfSkill2CdUntilMs: (players.get(socketToId.get(ws))?.skill2CdUntilMs) || 0,
+selfSkill3CdUntilMs: (players.get(socketToId.get(ws))?.skill3CdUntilMs) || 0,
+selfSkill4CdUntilMs: (players.get(socketToId.get(ws))?.skill4CdUntilMs) || 0,
 selfMonsterBook: (players.get(socketToId.get(ws))?.monsterBook) || {},
       players: ps,
       npcs: ns,

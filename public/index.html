@@ -207,6 +207,82 @@ const skill2FxByCaster = new Map(); // casterId -> { startMs }
 const SKILL2_GAP_MS = 120;
 const SKILL2_VIS_MS = 360;
 
+// ===== Skill 3: Dash Slash (sword-only) =====
+let skill3CdUntilMs = 0;
+let skill3CdTotalMs = 0;
+let _lastSkill3CdUntilMs = 0;
+
+// Hotbar feedback when player tries to use Skill 3 while it is not available
+let skill3HotbarNackUntilMs = 0;
+let skill3HotbarShakeUntilMs = 0;
+let skill3HotbarShakeSeed = 0;
+
+function triggerSkill3HotbarNack() {
+  const now = performance.now();
+  skill3HotbarNackUntilMs = now + 420;
+  skill3HotbarShakeUntilMs = now + 420;
+  skill3HotbarShakeSeed = Math.random() * 1000;
+}
+
+// ===== Skill 4: Wide Slash (sword-only) =====
+let skill4CdUntilMs = 0;
+let skill4CdTotalMs = 0;
+let _lastSkill4CdUntilMs = 0;
+
+// Hotbar feedback when player tries to use Skill 4 while it is not available
+let skill4HotbarNackUntilMs = 0;   // UI time (performance.now)
+let skill4HotbarShakeUntilMs = 0;  // UI time (performance.now)
+let skill4HotbarShakeSeed = 0;
+
+function triggerSkill4HotbarNack() {
+  const now = performance.now();
+  skill4HotbarNackUntilMs = now + 420;
+  skill4HotbarShakeUntilMs = now + 420;
+  skill4HotbarShakeSeed = Math.random() * 1000;
+}
+
+// Optional: dash trail visuals (map-scoped)
+const skill3FxByCaster = new Map(); // casterId -> { startMs, from:{x,y}, to:{x,y} }
+const SKILL3_TRAIL_MS = 220;
+
+function drawSkill3Trails() {
+  if (!skill3FxByCaster || skill3FxByCaster.size === 0) return;
+
+  const nowAbs = (typeof serverNowMs === "function") ? serverNowMs() : Date.now();
+
+  for (const [cid, fx] of skill3FxByCaster.entries()) {
+    const t = nowAbs - (fx.startMs || 0);
+    if (t < 0) continue;
+    if (t > SKILL3_TRAIL_MS + 60) { skill3FxByCaster.delete(cid); continue; }
+
+    const a = Math.max(0, 1 - (t / SKILL3_TRAIL_MS));
+
+    const x1 = (fx.from?.x ?? 0) - camX;
+    const y1 = (fx.from?.y ?? 0) - camY;
+    const x2 = (fx.to?.x ?? 0) - camX;
+    const y2 = (fx.to?.y ?? 0) - camY;
+
+    ctx.save();
+    ctx.globalAlpha = 0.35 * a;
+    ctx.lineWidth = 10;
+    ctx.lineCap = "round";
+    ctx.strokeStyle = "rgba(255,255,255,0.95)";
+    ctx.beginPath();
+    ctx.moveTo(x1, y1);
+    ctx.lineTo(x2, y2);
+    ctx.stroke();
+
+    // small burst at the end
+    ctx.globalAlpha = 0.55 * a;
+    ctx.fillStyle = "rgba(255,255,255,0.95)";
+    ctx.beginPath();
+    ctx.arc(x2, y2, 8, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.restore();
+  }
+}
+
 const TILE_PAD = 1;
 const TILESET_COLS = 5; // tiles per row in tiles.png and tiles_objects.png
 // Convention: odd rows in tiles.png are passable; even rows are blocked.
@@ -406,6 +482,95 @@ function activateSkillById(skillId) {
       return true;
     }
     hotbarToast("Skill2 not available (sendSkill2DoubleStab missing)");
+    return false;
+  }
+
+  // Skill3: Dash Slash (sword-only)
+  if (skillId === "skill3") {
+    if (typeof activateSkill3 === "function") { activateSkill3(); return true; }
+
+    const nowAbs = (typeof serverNowMs === "function") ? serverNowMs() : Date.now();
+    if (typeof skill3CdUntilMs !== "undefined" && nowAbs < skill3CdUntilMs) {
+      if (typeof triggerSkill3HotbarNack === "function") triggerSkill3HotbarNack();
+      return false;
+    }
+
+    const me = (typeof worldPlayers !== "undefined" && typeof myId !== "undefined")
+      ? worldPlayers?.[myId]
+      : null;
+    const weaponKey = me?.weapon || null;
+    if (weaponKey !== "sword") {
+      if (typeof levelToastText !== "undefined" && typeof levelToastUntilMs !== "undefined") {
+        levelToastText = "Equip a sword to use Skill 3";
+        levelToastUntilMs = performance.now() + 1500;
+      } else {
+        hotbarToast("Equip a sword to use Skill 3");
+      }
+      return false;
+    }
+
+    if (typeof sendSkill3DashSlashAtWorld === "function" && typeof lastAim !== "undefined" && lastAim?.has) {
+      sendSkill3DashSlashAtWorld(lastAim.wx, lastAim.wy, lastAim.mx, lastAim.my);
+      return true;
+    }
+    if (typeof sendSkill3DashSlash === "function") {
+      sendSkill3DashSlash();
+      return true;
+    }
+    hotbarToast("Skill3 not available (sendSkill3DashSlash missing)");
+    return false;
+  }
+
+
+  // Skill4: Wide Slash (sword-only)
+  if (skillId === "skill4") {
+    const nowAbs = (typeof serverNowMs === "function") ? serverNowMs() : Date.now();
+    if (typeof skill4CdUntilMs !== "undefined" && nowAbs < skill4CdUntilMs) {
+      if (typeof triggerSkill4HotbarNack === "function") triggerSkill4HotbarNack();
+      return false;
+    }
+
+    const me = (typeof worldPlayers !== "undefined" && typeof myId !== "undefined")
+      ? worldPlayers?.[myId]
+      : null;
+    const weaponKey = me?.weapon || null;
+    if (weaponKey !== "sword") {
+      if (typeof levelToastText !== "undefined" && typeof levelToastUntilMs !== "undefined") {
+        levelToastText = "Equip a sword to use Skill 4";
+        levelToastUntilMs = performance.now() + 1500;
+      } else {
+        hotbarToast("Equip a sword to use Skill 4");
+      }
+      return false;
+    }
+
+    // Use the last aim position when available, otherwise swing straight ahead
+    let wx = null, wy = null, mx = null, my = null;
+    if (typeof lastAim !== "undefined" && lastAim && lastAim.has) {
+      wx = lastAim.wx; wy = lastAim.wy; mx = lastAim.mx; my = lastAim.my;
+    } else if (me) {
+      const px = me.x ?? 0;
+      const py = me.y ?? 0;
+      const fx = me.facing?.x ?? 0;
+      const fy = me.facing?.y ?? 1;
+      const len = Math.hypot(fx, fy) || 1;
+      const dirx = fx / len;
+      const diry = fy / len;
+      const range = 220;
+      wx = px + dirx * range;
+      wy = py + diry * range;
+    }
+
+    if (typeof sendSkill4WideSlashAtWorld === "function" && wx != null && wy != null) {
+      sendSkill4WideSlashAtWorld(wx, wy, mx, my);
+      return true;
+    }
+    if (typeof sendSkill4WideSlash === "function") {
+      sendSkill4WideSlash();
+      return true;
+    }
+
+    hotbarToast("Skill4 not available (sendSkill4WideSlash missing)");
     return false;
   }
 
@@ -609,6 +774,16 @@ function drawHotbar() {
         if (typeof skill2CdUntilMs === "number" && nowAbs < skill2CdUntilMs) {
           lockUntil = Math.max(lockUntil, skill2CdUntilMs);
           totalMs = Math.max(totalMs, Number(skill2CdTotalMs || 0));
+        }
+      } else if (slot.id === "skill3") {
+        if (typeof skill3CdUntilMs === "number" && nowAbs < skill3CdUntilMs) {
+          lockUntil = Math.max(lockUntil, skill3CdUntilMs);
+          totalMs = Math.max(totalMs, Number(skill3CdTotalMs || 0));
+        }
+      } else if (slot.id === "skill4") {
+        if (typeof skill4CdUntilMs === "number" && nowAbs < skill4CdUntilMs) {
+          lockUntil = Math.max(lockUntil, skill4CdUntilMs);
+          totalMs = Math.max(totalMs, Number(skill4CdTotalMs || 0));
         }
       }
 
@@ -1064,11 +1239,18 @@ const skill1IconImg = new Image();
 skill1IconImg.src = "/assets/skills/icons/icon_skill_blackhole.png";
 const skill2IconImg = new Image();
 skill2IconImg.src = "/assets/skills/icons/icon_skill_double_stab.png";
+const skill3IconImg = new Image();
+skill3IconImg.src = "/assets/skills/icons/icon_skill_double_stab.png";
+
+const skill4IconImg = new Image();
+skill4IconImg.src = "/assets/skills/icons/icon_skill_big_slash.png";
 
 // Hotbar icon lookup for skills
 const hotbarSkillIcons = {
   skill1: skill1IconImg,
   skill2: skill2IconImg,
+  skill3: skill3IconImg,
+  skill4: skill4IconImg,
 };
 
 function getItemIconImage(itemId) {
@@ -1767,7 +1949,22 @@ function drawSkillsMenu() {
 
   // Basic skill catalog (placeholder-friendly)
   const skillCatalog = {
-    sword: [],
+    sword: [
+      {
+        id: "skill3",
+        name: "Dash Slash",
+        key: "3",
+        icon: skill3IconImg,
+        desc: "Dash forward and slash. Requires a sword.",
+      },
+      {
+        id: "skill4",
+        name: "Wide Slash",
+        key: "4",
+        icon: skill4IconImg,
+        desc: "A wide sword swing that hits up to 3 nearby enemies. Requires a sword.",
+      },
+    ],
     spear: [
       {
         id: "skill2",
@@ -2366,6 +2563,20 @@ ws.onmessage = (e) => {
     return;
   }
 
+if (msg.type === "skill3Fx") {
+    // Optional dash trail visuals
+    if (msg.casterId != null && typeof msg.startMs === "number") {
+      const from = (msg.from && typeof msg.from === "object")
+        ? { x: Number(msg.from.x) || 0, y: Number(msg.from.y) || 0 }
+        : null;
+      const to = (msg.to && typeof msg.to === "object")
+        ? { x: Number(msg.to.x) || 0, y: Number(msg.to.y) || 0 }
+        : null;
+      if (from && to) skill3FxByCaster.set(String(msg.casterId), { startMs: msg.startMs, from, to });
+    }
+    return;
+  }
+
   if (msg.type === "welcome") {
     myId = msg.id;
     map = msg.map;
@@ -2444,6 +2655,23 @@ if (Array.isArray(msg.whirlpools)) whirlpools = msg.whirlpools;
       if (skill2CdUntilMs > _nowAbs && skill2CdUntilMs !== _lastSkill2CdUntilMs) {
         skill2CdTotalMs = Math.max(0, skill2CdUntilMs - _nowAbs);
         _lastSkill2CdUntilMs = skill2CdUntilMs;
+      }
+    }
+    // Skill 3 timers for local HUD/hotbar
+    if (typeof msg.selfSkill3CdUntilMs === "number") {
+      skill3CdUntilMs = msg.selfSkill3CdUntilMs;
+      if (skill3CdUntilMs > _nowAbs && skill3CdUntilMs !== _lastSkill3CdUntilMs) {
+        skill3CdTotalMs = Math.max(0, skill3CdUntilMs - _nowAbs);
+        _lastSkill3CdUntilMs = skill3CdUntilMs;
+      }
+    }
+
+    // Skill 4 timers for local HUD/hotbar
+    if (typeof msg.selfSkill4CdUntilMs === "number") {
+      skill4CdUntilMs = msg.selfSkill4CdUntilMs;
+      if (skill4CdUntilMs > _nowAbs && skill4CdUntilMs !== _lastSkill4CdUntilMs) {
+        skill4CdTotalMs = Math.max(0, skill4CdUntilMs - _nowAbs);
+        _lastSkill4CdUntilMs = skill4CdUntilMs;
       }
     }
 
@@ -2768,6 +2996,82 @@ function sendSkill2DoubleStab() {
 
 
 
+
+function sendSkill3DashSlashAtWorld(wx, wy, mx = null, my = null) {
+  const me = getMyPos();
+  if (!me) return;
+
+  // Derive aim direction from screen-space (mouse relative to the player's rendered position),
+  // matching sendAttackAtWorld().
+  let dx = wx - me.x;
+  let dy = wy - me.y;
+
+  if (mx != null && my != null) {
+    const px = (me.x - camX);
+    const py = (me.y - camY);
+    dx = mx - px;
+    dy = my - py;
+  }
+
+  const d = dirFromVector(dx, dy);
+
+  // Drive local facing immediately (no local swing; we still wait for server atkAnim)
+  if (d != null) {
+    const st = getAnim(myId, me.x, me.y);
+    st.dir = d;
+  }
+
+  const len = Math.hypot(dx, dy) || 1;
+  const aimDirX = dx / len;
+  const aimDirY = dy / len;
+
+  if (ws.readyState === 1) {
+    ws.send(JSON.stringify({ type: "skill3DashSlash", aimX: wx, aimY: wy, aimDirX, aimDirY }));
+  }
+}
+
+function sendSkill3DashSlash() {
+  if (ws.readyState !== 1) return;
+  ws.send(JSON.stringify({ type: "skill3DashSlash" }));
+}
+
+function sendSkill4WideSlashAtWorld(wx, wy, mx = null, my = null) {
+  const me = getMyPos();
+  if (!me) return;
+
+  // Derive aim direction from screen-space (mouse relative to the player's rendered position),
+  // matching sendAttackAtWorld().
+  let dx = wx - me.x;
+  let dy = wy - me.y;
+
+  if (mx != null && my != null) {
+    const px = (me.x - camX);
+    const py = (me.y - camY);
+    dx = mx - px;
+    dy = my - py;
+  }
+
+  const d = dirFromVector(dx, dy);
+
+  // Drive local facing immediately (no local swing; we still wait for server atkAnim)
+  if (d != null) {
+    const st = getAnim(myId, me.x, me.y);
+    st.dir = d;
+  }
+
+  const len = Math.hypot(dx, dy) || 1;
+  const aimDirX = dx / len;
+  const aimDirY = dy / len;
+
+  if (ws.readyState === 1) {
+    ws.send(JSON.stringify({ type: "skill4WideSlash", aimX: wx, aimY: wy, aimDirX, aimDirY }));
+  }
+}
+
+function sendSkill4WideSlash() {
+  if (ws.readyState !== 1) return;
+  ws.send(JSON.stringify({ type: "skill4WideSlash" }));
+}
 
 
 
@@ -3768,7 +4072,7 @@ function drawHitTintOnTop(img, x, y, dirRow, frameCol, rgbaColor, frameW = NPC_F
    ATTACK VISUALS
 ====================== */
 
-function drawSwordSlash(x, y, dir, phase01, swordImg) {
+function drawSwordSlash(x, y, dir, phase01, swordImg, atkKind = null) {
   // Sword slash: uses the equipped sword overlay image and a wide arc "swish".
   // Visual-only; server controls actual hit logic.
   x = Math.round(x); y = Math.round(y);
@@ -3808,8 +4112,18 @@ function drawSwordSlash(x, y, dir, phase01, swordImg) {
 
   const ang = a0 + (a1 - a0) * clamp(u, 0, 1);
 
+  // Base geometry for the blade + arc so Skill 4 can scale it up cleanly
+  const baseReach = 18;
+  const baseR = 30;
+  const baseW = 32;
+  const baseH = 64;
+  const baseGripX = 16;
+  const baseGripY = 50;
+
+  const scale = (atkKind === "skill4") ? 1.4 : 1.0;
+
   // Slight outward reach so the blade clears the body
-  const reach = 18;
+  const reach = baseReach * scale;
   const ox = Math.cos(ang) * reach;
   const oy = Math.sin(ang) * reach;
 
@@ -3819,7 +4133,7 @@ function drawSwordSlash(x, y, dir, phase01, swordImg) {
   ctx.globalAlpha = (t < 0.12) ? (t / 0.12) : (t > 0.9 ? (1 - (t - 0.9) / 0.1) : 1);
   ctx.globalAlpha *= 0.55;
 
-  const r = 30;
+  const r = baseR * scale;
   const start = a0;
   const end = ang;
 
@@ -3852,9 +4166,9 @@ function drawSwordSlash(x, y, dir, phase01, swordImg) {
   // Mirror for LEFT so the grip stays in the hand
   if (dir === DIR.LEFT) ctx.scale(-1, 1);
 
-  const W = 32, H = 64;
-  const gripX = 16;
-  const gripY = 50;
+  const W = baseW * scale, H = baseH * scale;
+  const gripX = baseGripX * scale;
+  const gripY = baseGripY * scale;
 
   ctx.imageSmoothingEnabled = false;
   if (ready) {
@@ -5432,7 +5746,7 @@ if (!isNpc && weaponActive) {
 
 const weaponBehind = (renderDir === DIR.UP) && (weapon === "sword" || weapon === "spear");
         if (weaponBehind) {
-          if (weapon === "sword") drawSwordSlash(drawX, drawY, renderDir, weaponPhase01, getSwordSpriteForPlayer(p2));
+          if (weapon === "sword") drawSwordSlash(drawX, drawY, renderDir, weaponPhase01, getSwordSpriteForPlayer(p2), p2?.atkKind || null);
           else if (weapon === "spear") drawSpearThrust(drawX, drawY, renderDir, weaponPhase01, getSpearSpriteForPlayer(p2), e.id);
           weaponDrawnBehind = true;
         }
@@ -5547,7 +5861,7 @@ drawSprite(bodySprite, drawX, drawY, renderDir, bodyFrame, bodyFW, bodyFH);
     }
     // weapon visuals for players (front pass)
     if (!isNpc && weaponActive && !weaponDrawnBehind) {
-      if (weapon === "sword") drawSwordSlash(drawX, drawY, renderDir, weaponPhase01, getSwordSpriteForPlayer(p2));
+      if (weapon === "sword") drawSwordSlash(drawX, drawY, renderDir, weaponPhase01, getSwordSpriteForPlayer(p2), p2?.atkKind || null);
       else if (weapon === "spear") drawSpearThrust(drawX, drawY, renderDir, weaponPhase01, getSpearSpriteForPlayer(p), e.id);
       else if (weapon === "wand") drawWandCastSpark(drawX, drawY, renderDir, weaponPhase01);
     }
@@ -5593,6 +5907,7 @@ drawSprite(bodySprite, drawX, drawY, renderDir, bodyFrame, bodyFW, bodyFH);
   drawEditorOverlay();
 
   drawFadeOverlay();
+  drawSkill3Trails();
   drawHud();
   drawHotbar();
 
