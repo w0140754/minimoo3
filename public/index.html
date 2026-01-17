@@ -163,6 +163,10 @@ const SKILL1_RANGE_PX = 200; // targeting preview radius
 const SKILL1_EFFECT_RADIUS_PX = 200; // effect radius (server also sends w.rad)
 let skill1Primed = false;
 
+// Duration of the Healing Cloud (Skill 6) in milliseconds
+const SKILL6_CLOUD_ACTIVE_MS = 10_000;
+
+
 // Hotbar feedback when player tries to use Skill 1 while it is not available
 let skill1HotbarNackUntilMs = 0;   // UI time (performance.now)
 let skill1HotbarShakeUntilMs = 0;  // UI time (performance.now)
@@ -184,6 +188,8 @@ let skill1CdTotalMs = 0;     // client-learned total cooldown duration (for UI)
 let _lastSkill1ActiveUntilMs = 0;
 let _lastSkill1CdUntilMs = 0;
 
+// Healing Cloud (Skill 6) duration for our local player (server authoritative)
+let skill6CloudUntilMs = 0;
 
 // ===== Skill 2: Double Stab (spear-only) =====
 let skill2CdUntilMs = 0;
@@ -457,6 +463,48 @@ function activateSkillById(skillId) {
     if (typeof skill1PrimedUntilMs !== "undefined") skill1PrimedUntilMs = 0;
 
     return true;
+  }
+
+  // Skill5: Familiar (wand-only toggle)
+  if (skillId === "skill5") {
+    const me = (typeof worldPlayers !== "undefined" && typeof myId !== "undefined")
+      ? worldPlayers?.[myId]
+      : null;
+    const weaponKey = me?.weapon || null;
+    if (weaponKey !== "wand") {
+      hotbarToast("Equip a wand to use Familiar");
+      return false;
+    }
+    if (typeof sendSkill5FamiliarToggle === "function") {
+      sendSkill5FamiliarToggle();
+      return true;
+    }
+    hotbarToast("Skill5 not available (sendSkill5FamiliarToggle missing)");
+    return false;
+  }
+
+  // Skill6: Healing Cloud (wand-only)
+  if (skillId === "skill6") {
+    const me = (typeof worldPlayers !== "undefined" && typeof myId !== "undefined")
+      ? worldPlayers?.[myId]
+      : null;
+    const weaponKey = me?.weapon || null;
+    if (weaponKey !== "wand") {
+      hotbarToast("Equip a wand to use Healing Cloud");
+      return false;
+    }
+
+    const nowAbs = (typeof serverNowMs === "function") ? serverNowMs() : Date.now();
+    if (typeof skill6CloudUntilMs === "number" && nowAbs < skill6CloudUntilMs) {
+      return false;
+    }
+
+    if (typeof sendSkill6HealingCloud === "function") {
+      sendSkill6HealingCloud();
+      return true;
+    }
+    hotbarToast("Skill6 not available (sendSkill6HealingCloud missing)");
+    return false;
   }
 
   // Skill2: your spear double-stab
@@ -784,6 +832,12 @@ function drawHotbar() {
         if (typeof skill4CdUntilMs === "number" && nowAbs < skill4CdUntilMs) {
           lockUntil = Math.max(lockUntil, skill4CdUntilMs);
           totalMs = Math.max(totalMs, Number(skill4CdTotalMs || 0));
+        }
+      } else if (slot.id === "skill6") {
+        // Healing Cloud uses its active duration as a lockout while the cloud persists.
+        if (typeof skill6CloudUntilMs === "number" && nowAbs < skill6CloudUntilMs) {
+          lockUntil = Math.max(lockUntil, skill6CloudUntilMs);
+          totalMs = Math.max(totalMs, Number(SKILL6_CLOUD_ACTIVE_MS || 0));
         }
       }
 
@@ -1245,12 +1299,22 @@ skill3IconImg.src = "/assets/skills/icons/icon_skill_double_stab.png";
 const skill4IconImg = new Image();
 skill4IconImg.src = "/assets/skills/icons/icon_skill_big_slash.png";
 
+// Skill 5 icon (placeholder: reuse existing icon until a dedicated familiar icon is added)
+const skill5IconImg = new Image();
+skill5IconImg.src = "/assets/skills/icons/icon_skill_mage_orb.png";
+
+// Skill 6 icon (Healing Cloud) – reuse the cloud sprite as an icon for now
+const skill6IconImg = new Image();
+skill6IconImg.src = "/assets/skills/icons/icon_skill_cloud.png";
+
 // Hotbar icon lookup for skills
 const hotbarSkillIcons = {
   skill1: skill1IconImg,
   skill2: skill2IconImg,
   skill3: skill3IconImg,
   skill4: skill4IconImg,
+  skill5: skill5IconImg,
+  skill6: skill6IconImg,
 };
 
 function getItemIconImage(itemId) {
@@ -1302,6 +1366,21 @@ const projectileSprites = {
 projectileSprites.wand_projectile.src = "/assets/wand_projectile.png";
 // Skill 1 projectile sprite (used only for Skill 1 primed shots)
 projectileSprites.skill1_projectile.src = "/assets/skill1_projectile.png";
+
+// Familiar orb sprite for Skill 5 (wand familiar)
+const familiarOrbImg = new Image();
+familiarOrbImg.src = "/assets/skills/skill_orb.png";
+
+// Healing Cloud sprite for Skill 6 (wand-only heal cloud)
+const healingCloudImg = new Image();
+healingCloudImg.src = "/assets/skills/skill_cloud.png";
+
+// Visual easing constants for Healing Cloud
+const HEALING_CLOUD_FADE_MS = 600;        // fade-in duration
+const HEALING_CLOUD_FADE_OUT_MS = 600;        // fade-out duration
+const HEALING_CLOUD_OFFSET_START =  60;    // px above feet at spawn
+const HEALING_CLOUD_OFFSET_FINAL =  90;    // px above feet when “settled”
+const HEALING_CLOUD_FLOAT_PIXELS = 16;        // upward drift on fade-out
 
 function getSpearSpriteForPlayer(p) {
   const wid = p?.equipment?.weapon;
@@ -1931,6 +2010,9 @@ const netState = new Map();
 
 /* --- HIT FX STATE --- */
 const hitFx = new Map();
+let familiarHitPulseUntilMs = 0;
+const familiarTrails = new Map();
+const familiarStates = new Map();
 let screenShakeUntilMs = 0;
 let screenShakeMag = 0;
 
@@ -1977,10 +2059,24 @@ function drawSkillsMenu() {
     wand: [
       {
         id: "skill1",
-        name: "Whirlpool Bolt",
+        name: "Anomaly",
         key: "1",
         icon: skill1IconImg,
         desc: "Shoot a bolt that creates a whirlpool on impact. Requires a wand.",
+      },
+      {
+        id: "skill5",
+        name: "Wisp",
+        key: "5",
+        icon: skill5IconImg,
+        desc: "Summon a familiar that follows you. When you hit a mob with a wand bolt, the familiar attacks it (1 hit/sec). Requires a wand.",
+      },
+      {
+        id: "skill6",
+        name: "Nimbus",
+        key: "6",
+        icon: skill6IconImg,
+        desc: "Summon a cloud above you that rains gentle healing for 10 seconds. Requires a wand.",
       },
     ],
   };
@@ -2553,6 +2649,31 @@ ws.onmessage = (e) => {
     return;
   }
 
+  if (msg.type === "skill5Rejected") {
+    hotbarToast(msg.reason || "Can't use Familiar");
+    return;
+  }
+
+  if (msg.type === "skill6Rejected") {
+    hotbarToast(msg.reason || "Can't use Healing Cloud");
+    return;
+  }
+
+  if (msg.type === "skill5State") {
+    // Immediate feedback; actual state comes from snapshots.
+    const on = !!msg.active;
+
+    // When familiar skill is toggled on, snap orb back to the player by
+    // clearing any cached client-side familiar state/trail for this owner.
+    if (on && myId) {
+      familiarStates.delete(myId);
+      familiarTrails.delete(myId);
+    }
+
+    return;
+  }
+
+
 
 
   if (msg.type === "skill2Fx") {
@@ -2689,6 +2810,17 @@ if (Array.isArray(msg.whirlpools)) whirlpools = msg.whirlpools;
     worldMobs = msg.mobs || {};
     worldDrops = msg.drops || {};
 	worldProjectiles = msg.projectiles || {};
+
+    // Skill 6: Healing Cloud – capture our own active-until timer from snapshot
+    if (typeof myId !== "undefined" && worldPlayers) {
+      const me = worldPlayers[myId];
+      if (me && typeof me.healingCloudUntilMs === "number") {
+        skill6CloudUntilMs = me.healingCloudUntilMs;
+      } else {
+        skill6CloudUntilMs = 0;
+      }
+    }
+
     // Track mob spawn/respawn so we can fade them in smoothly
     const nowMs = performance.now();
     for (const [id, mob] of Object.entries(worldMobs)) {
@@ -2718,6 +2850,10 @@ if (Array.isArray(msg.whirlpools)) whirlpools = msg.whirlpools;
     for (const id of Array.from(netState.keys())) if (!alive.has(id)) netState.delete(id);
 
 	if (mapChanged) {
+    // Clear client-side familiar visuals when the map changes
+    familiarStates.clear();
+    familiarTrails.clear();
+
 	  // Always resolve fade if map actually changed
 	  fadeState = "fadingIn";
 	  fadeTimer = 0;
@@ -2778,6 +2914,9 @@ if (Array.isArray(msg.whirlpools)) whirlpools = msg.whirlpools;
     const srcX = +msg.srcX || 0;
     const srcY = +msg.srcY || 0;
 
+    // Use fx to distinguish familiar hits from normal hits
+    const fxKind = String(msg.fx || "");
+
     let tx = 0, ty = 0;
     const rawP = worldPlayers[targetId];
     const rawM = worldMobs[targetId];
@@ -2806,18 +2945,54 @@ if (Array.isArray(msg.whirlpools)) whirlpools = msg.whirlpools;
 
     const isMe = (targetId === myId);
 
-    hitFx.set(targetId, {
+    // Familiar hits: no visual knockback / bump.
+    const bumpScale = (fxKind === "familiar") ? 0 : 6;
+
+    if (fxKind === "familiar") {
+      familiarHitPulseUntilMs = performance.now() + 220;
+    }
+
+hitFx.set(targetId, {
       untilMs: performance.now() + 220,
       color: (kind === "player") ? "rgba(255,0,0,0.45)" : "rgba(255,255,255,0.45)",
-      bumpX: ax * 6,
-      bumpY: ay * 6,
+      bumpX: ax * bumpScale,
+      bumpY: ay * bumpScale,
     });
 
-    if (isMe) startScreenShake(5, 160);
+    if (isMe && bumpScale !== 0) startScreenShake(5, 160);
     return;
   }
 
-  if (msg.type === "levelup") {
+
+  
+  if (msg.type === "heal") {
+    const targetId = String(msg.targetId || "");
+    const amount = Number(msg.amount || 0);
+
+    const rawP = worldPlayers[targetId];
+    if (amount <= 0 || !rawP) return;
+
+    // Green healing number popup
+    damagePops.push({
+      x: rawP.x,
+      y: rawP.y - 10,
+      text: `${amount}`,
+      color: "#3cff9c",
+      untilMs: performance.now() + 650
+    });
+
+    // Gentle green/white flash on the healed player, similar to hitFx but without bump.
+    hitFx.set(targetId, {
+      untilMs: performance.now() + 220,
+      color: "rgba(160,255,200,0.55)",
+      bumpX: 0,
+      bumpY: 0,
+    });
+
+    return;
+  }
+
+if (msg.type === "levelup") {
     levelToastText = `LEVEL UP!  Lv ${msg.level}`;
     levelToastUntilMs = performance.now() + 1600;
     return;
@@ -2955,6 +3130,15 @@ function sendSkill1Arm() {
   ws.send(JSON.stringify({ type: "skill1Arm" }));
 }
 
+function sendSkill5FamiliarToggle() {
+  if (ws.readyState !== 1) return;
+  ws.send(JSON.stringify({ type: "skill5FamiliarToggle" }));
+}
+
+function sendSkill6HealingCloud() {
+  if (!ws || ws.readyState !== 1) return;
+  ws.send(JSON.stringify({ type: "skill6HealingCloud" }));
+}
 
 function sendSkill2DoubleStabAtWorld(wx, wy, mx = null, my = null) {
   const me = getMyPos();
@@ -4340,6 +4524,75 @@ function drawSpearHeld(x, y, dir, spearImg) {
 }
 
 
+function drawWandCast(x, y, dir, phase01, wandImg) {
+  // Animated wand casting: small lift + tilt based on direction, plus the existing spark.
+  x = Math.round(x); y = Math.round(y);
+
+  const t = clamp(phase01 || 0, 0, 1);
+  const pulse = 1 - Math.abs(t - 0.5) * 2; // 0 -> 1 -> 0 over the swing
+
+  // Reuse the same hand anchors as drawWandHeld so it lines up with the hands.
+  const hand = ({
+    [DIR.RIGHT]: { x: -6,  y: 20 },
+    [DIR.LEFT]:  { x:  6,  y: 20 },
+    [DIR.DOWN]:  { x: -12, y: 20 },
+    [DIR.UP]:    { x:  10, y: 20 },
+  }[dir] || { x: 0, y: 0 });
+
+  const px = x + hand.x;
+  const py = y + hand.y;
+
+  const img = wandImg;
+  const ready = img && img.complete && img.naturalWidth > 0;
+
+  ctx.save();
+  ctx.translate(px, py);
+
+  // Mirror for LEFT so art stays consistent.
+  if (dir === DIR.LEFT) ctx.scale(-1, 1);
+
+  // Lift the wand slightly at peak of the cast.
+  const lift = -Math.round(pulse * 6);
+  ctx.translate(0, lift);
+
+  // Subtle tilt during the cast.
+      const maxTilt = Math.PI / 14;
+      let tilt = 0;
+      // Use the same tilt for LEFT and RIGHT; mirroring is handled by scale(-1,1) for LEFT.
+      const sideTilt = maxTilt * pulse;
+      if (dir === DIR.RIGHT || dir === DIR.LEFT) {
+        tilt = sideTilt;
+      } else if (dir === DIR.DOWN) {
+        // No tilt when facing down; just use vertical lift.
+        tilt = 0;
+      } else {
+        // UP
+        tilt = -maxTilt * 0.7 * pulse;
+      }
+      ctx.rotate(tilt);
+
+  const W = 32, H = 64;
+  const gripX = 16;
+  const gripY = 52;
+
+  ctx.imageSmoothingEnabled = false;
+  if (ready) {
+    ctx.drawImage(img, 0, 0, img.naturalWidth, img.naturalHeight, -gripX, -gripY, W, H);
+  } else {
+    // Fallback: simple staff
+    ctx.fillStyle = "#7a5a2a";
+    ctx.fillRect(-2, -50, 4, 48);
+    ctx.fillStyle = "#bde0fe";
+    ctx.fillRect(-4, -54, 8, 6);
+  }
+
+  ctx.restore();
+
+  // Keep using the existing spark effect at the tip of the wand.
+  drawWandCastSpark(x, y, dir, phase01);
+}
+
+
 function drawWandCastSpark(x, y, dir, phase01) {
   // tiny “spark” near hand to show casting
   x = Math.round(x); y = Math.round(y);
@@ -4395,6 +4648,298 @@ function drawProjectile(pr) {
 
   ctx.fillStyle = "#ffffff";
   ctx.fillRect(x - 1, y - 1, 2, 2);
+  ctx.restore();
+}
+
+
+/* ======================
+   SKILL 5: FAMILIAR (client-only visuals)
+====================== */
+function _hashStr32(s) {
+  // Tiny deterministic hash for stable per-player orbit offsets
+  s = String(s || "");
+  let h = 2166136261;
+  for (let i = 0; i < s.length; i++) {
+    h ^= s.charCodeAt(i);
+    h = Math.imul(h, 16777619);
+  }
+  return h >>> 0;
+}
+
+
+function getFamiliarRenderState(ownerId, ownerPos, targetMob, targetPos, dt) {
+  const key = ownerId;
+  let st = familiarStates.get(key);
+  if (!st) {
+    st = {
+      x: ownerPos.x,
+      y: ownerPos.y - 32,
+      orbitAngle: 0,
+    };
+    familiarStates.set(key, st);
+  }
+
+  const hasTarget = !!(targetMob && !targetMob.dead && !(targetMob.corpseMs > 0));
+  let anchorX, anchorY;
+  if (hasTarget && targetPos) {
+    anchorX = targetPos.x;
+    anchorY = targetPos.y - 26;
+  } else {
+    anchorX = ownerPos.x;
+    anchorY = ownerPos.y - 32;
+  }
+
+  const speed = 260; // travel speed for flying between player/targets
+  const dx = anchorX - st.x;
+  const dy = anchorY - st.y;
+  const dist = Math.hypot(dx, dy) || 1;
+  const maxStep = speed * dt;
+
+  if (dist > maxStep) {
+    const t = maxStep / dist;
+    st.x += dx * t;
+    st.y += dy * t;
+  } else {
+    st.x = anchorX;
+    st.y = anchorY;
+  }
+
+  // When close to anchor, add a small orbit wobble
+  const near = 24;
+  if (dist < near) {
+    const baseAngSpeed = hasTarget ? 3.0 : 2.2;
+    st.orbitAngle += baseAngSpeed * dt;
+    const radiusX = hasTarget ? 14 : 18;
+    const radiusY = hasTarget ? 6 : 8;
+    const ox = Math.cos(st.orbitAngle) * radiusX;
+    const oy = Math.sin(st.orbitAngle) * radiusY;
+    st.x = anchorX + ox;
+    st.y = anchorY + oy;
+  }
+
+  const isTargeting = hasTarget;
+  const tX = (hasTarget && targetPos) ? targetPos.x : null;
+  const tY = (hasTarget && targetPos) ? (targetPos.y - 6) : null;
+
+  return { x: st.x, y: st.y, isTargeting, tX, tY };
+}
+
+function drawFamiliarOrb(x, y, isTargeting, tX = null, tY = null) {
+  ctx.save();
+  x = Math.round(x);
+  y = Math.round(y);
+
+  const now = performance.now();
+  const pulseT = Math.max(0, familiarHitPulseUntilMs - now);
+  const pulsePhase = pulseT > 0 ? (pulseT / 220) : 0; // 0..1
+  const pulseScale = 1 + pulsePhase * 0.35;          // up to ~1.35x on hit
+  const pulseAlphaBoost = 0.3 * pulsePhase;
+
+  // Slight size bump when it's actively targeting something
+  const baseSize = 28;          // sprite is 28x28
+  const baseCoreSize = isTargeting ? 30 : baseSize;
+  const size = baseCoreSize * pulseScale;
+  const half = size / 2;
+
+  // Soft glow behind the orb (keeps the old “magic light” feel)
+  const glowR = size * 0.7;
+  const glow = ctx.createRadialGradient(x, y, 0, x, y, glowR);
+  const innerAlpha = 0.9 + pulseAlphaBoost; // brighter on hit
+  glow.addColorStop(0, `rgba(255,255,255,${innerAlpha.toFixed(2)})`);
+  glow.addColorStop(1, "rgba(80,200,255,0.0)");
+  ctx.fillStyle = glow;
+  ctx.beginPath();
+  ctx.arc(x, y, glowR, 0, Math.PI * 2);
+  ctx.fill();
+
+  // Main sprite
+  const img = familiarOrbImg;
+  const ready = img && img.complete && img.naturalWidth > 0;
+
+  if (ready) {
+    ctx.imageSmoothingEnabled = false;
+    ctx.drawImage(
+      img,
+      0, 0, img.naturalWidth, img.naturalHeight,
+      Math.round(x - half),
+      Math.round(y - half),
+      size,
+      size
+    );
+  } else {
+    // Fallback: simple orb if the sprite hasn't loaded yet
+    const baseR = 7 * pulseScale;
+    const pulse = 1 + Math.sin(now / 160) * 0.25;
+    const r = baseR * pulse;
+
+    const grd = ctx.createRadialGradient(x, y, 0, x, y, r);
+    grd.addColorStop(0, "rgba(255,255,255,0.95)");
+    grd.addColorStop(1, "rgba(80,200,255,0.0)");
+    ctx.fillStyle = grd;
+    ctx.beginPath();
+    ctx.arc(x, y, r, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.strokeStyle = "rgba(180,230,255,0.85)";
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.arc(x, y, r, 0, Math.PI * 2);
+    ctx.stroke();
+  }
+
+  // No explicit tether line; sparkle trail + pulse handle feedback.
+
+  ctx.restore();
+}
+
+function drawHealingCloud(e, nowAbsMs) {
+  if (!e || !healingCloudImg) return;
+
+  const img = healingCloudImg;
+  const ready = img && img.complete && img.naturalWidth > 0;
+  const nowUi = performance.now();
+
+  // Approximate "time since spawned" using the known fixed duration and the
+  // server-supplied end timestamp, so we get a nice ease-in/out without needing
+  // extra per-client state.
+  const lifeMs = SKILL6_CLOUD_ACTIVE_MS;
+  let elapsedMs = 0;
+  if (e.endAbsMs && typeof e.endAbsMs === "number") {
+    const remaining = Math.max(0, e.endAbsMs - nowAbsMs);
+    elapsedMs = Math.max(0, Math.min(lifeMs, lifeMs - remaining));
+  }
+
+  // Fade-in (and slight pop/scale-in) based on HEALING_CLOUD_FADE_MS
+  let baseAlpha = 1;
+  let offsetY = HEALING_CLOUD_OFFSET_FINAL;
+  let scale = 1;
+  if (elapsedMs < HEALING_CLOUD_FADE_MS) {
+    const tIn = HEALING_CLOUD_FADE_MS > 0 ? (elapsedMs / HEALING_CLOUD_FADE_MS) : 1;
+    const easeIn = tIn * tIn * (3 - 2 * tIn); // smoothstep
+    baseAlpha = easeIn;
+    offsetY = HEALING_CLOUD_OFFSET_START +
+      (HEALING_CLOUD_OFFSET_FINAL - HEALING_CLOUD_OFFSET_START) * easeIn;
+
+    // Start slightly smaller and grow in
+    const minScale = 0.75;
+    scale = minScale + (1 - minScale) * easeIn;
+  }
+
+  // Fade-out + float-up near the end of life
+  if (elapsedMs > lifeMs - HEALING_CLOUD_FADE_OUT_MS) {
+    const raw = (lifeMs - elapsedMs) / HEALING_CLOUD_FADE_OUT_MS;
+    const tOut = Math.max(0, Math.min(1, raw));
+    const easeOut = tOut * tOut * (3 - 2 * tOut);
+    baseAlpha *= easeOut;
+    // Drift upward as it fades
+    offsetY += (1 - easeOut) * HEALING_CLOUD_FLOAT_PIXELS;
+  }
+
+  // Gentle bob / pulse while the cloud is active and "floating"
+  if (elapsedMs >= HEALING_CLOUD_FADE_MS &&
+      elapsedMs <= lifeMs - HEALING_CLOUD_FADE_OUT_MS) {
+    // Small vertical bobbing
+    const bob = Math.sin(nowUi / 650) * 4; // px
+    offsetY += bob;
+
+    // Tiny scale pulse so it feels alive
+    const pulse = 1 + Math.sin(nowUi / 900) * 0.03;
+    scale *= pulse;
+  }
+
+  const alpha = Math.min(1.0, baseAlpha * 1.05);
+
+  const x = Math.round(e.x);
+  const y = Math.round(e.y - offsetY);
+
+  const baseW = 128;
+  const baseH = 64;
+  const w = baseW * scale;
+  const h = baseH * scale;
+  const halfW = w / 2;
+  const halfH = h / 2;
+
+  ctx.save();
+
+  // Soft shadow under the cloud at ground level (anchored to where it was cast)
+  const groundY = e.y;
+  const shadowY = groundY +  28;
+  const shadowW = w * 0.55;
+  const shadowH = 6;
+  ctx.globalAlpha = alpha * 0.18;
+  ctx.fillStyle = "rgba(0, 0, 0, 0.35)";
+  ctx.beginPath();
+  ctx.ellipse(x, shadowY, shadowW / 2, shadowH / 2, 0, 0, Math.PI * 2);
+  ctx.fill();
+
+  ctx.imageSmoothingEnabled = false;
+  ctx.globalAlpha = alpha;
+
+  if (ready) {
+    ctx.drawImage(
+      img,
+      0,
+      0,
+      img.naturalWidth,
+      img.naturalHeight,
+      x - halfW,
+      y - halfH,
+      w,
+      h
+    );
+  } else {
+    // Simple placeholder rectangle if the sprite isn't ready yet
+    ctx.fillStyle = "rgba(180,180,255,0.55)";
+    ctx.fillRect(x - halfW, y - halfH, w, h);
+  }
+
+  // Very light rain indication – falling drops under the cloud, hitting near the shadow.
+// Start raining only after the cloud has fully floated up (post fade-in).
+if (elapsedMs >= HEALING_CLOUD_FADE_MS) {
+  const rainSpan = w * 0.6;
+  const rainStartX = x - rainSpan / 2;
+  const rainGroundY = groundY +  28;
+  const rainEndY = rainGroundY;
+
+  ctx.strokeStyle = "rgba(200,230,255,0.95)";
+  ctx.lineWidth = 1.6;
+
+  const drops = 14;
+  const travel = (rainEndY - (y + halfH - 10)); // vertical distance a drop travels
+  const cycleMs = 700; // time for a drop to fall from top to bottom
+
+  for (let i = 0; i < drops; i++) {
+    const px = rainStartX + (rainSpan * i) / (drops - 1);
+    const noiseX = Math.sin((nowUi / 260) + i * 1.11) * 2;
+    const phase = ((nowUi + i * 90) % cycleMs) / cycleMs; // 0..1 over the cycle
+
+    const dropHeadY = (y + halfH - 10) + phase * travel;
+    const dropTailY = dropHeadY - 10;
+
+    const dropX = px + noiseX;
+
+    // Clamp so drops don't render below the ground line
+    const headY = Math.min(dropHeadY, rainEndY);
+    const tailY = Math.min(dropTailY, headY);
+
+    // Main falling raindrop
+    ctx.beginPath();
+    ctx.moveTo(dropX, tailY);
+    ctx.lineTo(dropX, headY);
+    ctx.stroke();
+
+    // Tiny splash when the drop is near the ground
+    if (headY >= rainEndY - 1) {
+      const splashY = rainEndY + 1;
+      ctx.beginPath();
+      ctx.moveTo(dropX - 2, splashY);
+      ctx.lineTo(dropX, splashY - 2);
+      ctx.lineTo(dropX + 2, splashY);
+      ctx.stroke();
+    }
+  }
+}
+
   ctx.restore();
 }
 
@@ -5534,6 +6079,7 @@ function loop(nowMs) {
   cachedNearestNpc = computeNearestNpc();
   const npcPrompt = cachedNearestNpc ? { near: cachedNearestNpc, text: "Press E", spriteH: NPC_DRAW_H } : null;
   const entities = [];
+const cloudEntities = [];
 
   // object-layer solids (stumps/rocks) depth-sort with entities so you can walk behind them
   if (objMap) {
@@ -5567,6 +6113,50 @@ function loop(nowMs) {
     // IMPORTANT: use a feet anchor for depth sorting (keep render position unchanged)
     // 64x64 sprites: feet are ~22px below the sprite center.
     entities.push({ kind:"player", id, x: pos.x, y: pos.y, sortY: pos.y + 22 });
+
+    // Skill 5: familiar visual (depth-sorted with entities)
+    if (p && p.familiarActive) {
+      const tid = p.familiarTargetId;
+      const tm = (tid && worldMobs) ? worldMobs[tid] : null;
+      let mpos = null;
+      if (tm && !tm.dead && !(tm.corpseMs > 0)) {
+        mpos = getSmoothedPos(tid, tm.x, tm.y);
+      }
+
+      const fam = getFamiliarRenderState(id, pos, tm, mpos, dt);
+
+      entities.push({
+        kind: "fam",
+        id: `fam:${id}`,
+        ownerId: id,
+        x: fam.x,
+        y: fam.y,
+        sortY: fam.y + 4,
+        isTargeting: fam.isTargeting,
+        tX: fam.tX,
+        tY: fam.tY,
+      });
+    }
+
+    // Skill 6: Healing Cloud visual (depth-sorted with entities)
+    if (p && typeof p.healingCloudUntilMs === "number" && p.healingCloudUntilMs > 0) {
+      const nowAbs = (typeof serverNowMs === "function") ? serverNowMs() : Date.now();
+      if (nowAbs < p.healingCloudUntilMs &&
+          typeof p.healingCloudX === "number" &&
+          typeof p.healingCloudY === "number") {
+        const cx = p.healingCloudX;
+        const cy = p.healingCloudY;
+        entities.push({
+          kind: "cloud",
+          id: `cloud:${id}`,
+          ownerId: id,
+          x: cx,
+          y: cy,
+          sortY: cy - HEALING_CLOUD_OFFSET_FINAL,
+          endAbsMs: p.healingCloudUntilMs,
+        });
+      }
+    }
   }
   for (const [id, n] of Object.entries(worldNpcs)) {
     const pos = getSmoothedPos(id, n.x, n.y);
@@ -5583,6 +6173,47 @@ function loop(nowMs) {
   for (const e of entities) {
     if (e.kind === "obj") {
       drawObjectTile(e.tile, e.px, e.py);
+      continue;
+    }
+
+    if (e.kind === "fam") {
+      // Update / draw a faint trailing sparkle behind the familiar
+      const key = e.ownerId || e.id || "fam";
+      let trail = familiarTrails.get(key);
+      if (!trail) {
+        trail = [];
+        familiarTrails.set(key, trail);
+      }
+      const now = performance.now();
+      trail.push({ x: e.x, y: e.y, t: now });
+      if (trail.length > 7) {
+        trail.splice(0, trail.length - 7);
+      }
+
+      ctx.save();
+      ctx.globalCompositeOperation = "lighter";
+      for (let i = 0; i < trail.length; i++) {
+        const p = trail[i];
+        const age = now - p.t;
+        const life = 260;
+        if (age > life) continue;
+        const t = 1 - age / life;
+        const r = 2 + 2 * t;
+        ctx.globalAlpha = 0.28 * t;
+        ctx.beginPath();
+        ctx.arc(Math.round(p.x), Math.round(p.y), r, 0, Math.PI * 2);
+        ctx.fillStyle = "rgba(180,230,255,1)";
+        ctx.fill();
+      }
+      ctx.restore();
+
+      drawFamiliarOrb(e.x, e.y, !!e.isTargeting, e.tX, e.tY);
+      continue;
+    }
+
+    if (e.kind === "cloud") {
+      const nowAbs = (typeof serverNowMs === "function") ? serverNowMs() : Date.now();
+      cloudEntities.push({ e, nowAbs });
       continue;
     }
 
@@ -5745,6 +6376,11 @@ if (!isNpc && weaponActive) {
   }
 
 const weaponBehind = (renderDir === DIR.UP) && (weapon === "sword" || weapon === "spear");
+            // Wand attacks while facing UP should render behind the player sprite.
+            if (renderDir === DIR.UP && weapon === "wand" && weaponActive && !weaponDrawnBehind) {
+              drawWandCast(drawX, drawY, renderDir, weaponPhase01, getWandSpriteForPlayer(p));
+              weaponDrawnBehind = true;
+            }
         if (weaponBehind) {
           if (weapon === "sword") drawSwordSlash(drawX, drawY, renderDir, weaponPhase01, getSwordSpriteForPlayer(p2), p2?.atkKind || null);
           else if (weapon === "spear") drawSpearThrust(drawX, drawY, renderDir, weaponPhase01, getSpearSpriteForPlayer(p2), e.id);
@@ -5758,24 +6394,20 @@ const weaponBehind = (renderDir === DIR.UP) && (weapon === "sword" || weapon ===
     // Persistent spear when equipped (not attacking).
     // IMPORTANT: while weaponActive is true, we only draw the thrust (using the attack-locked renderDir).
     // This prevents the “held” spear from popping to a new facing direction mid-animation (no double-spears).
-    // Persistent held weapon when equipped.
-// For wand: keep it visible even while attacking/casting.
-// For sword/spear: keep previous behavior (don't double-draw during the swing).
-if (!isNpc && renderDir === DIR.UP) {
-  if (weapon === "wand") {
-    drawWandHeld(drawX, drawY, renderDir, getWandSpriteForPlayer(p2));
-    heldWeaponDrawnBehind = true;
-  } else if (!weaponActive) {
-    if (weapon === "spear") {
-      drawSpearHeld(drawX, drawY, renderDir, getSpearSpriteForPlayer(p2));
-      heldWeaponDrawnBehind = true;
-    } else if (weapon === "sword") {
-      drawSwordHeld(drawX, drawY, renderDir, getSwordSpriteForPlayer(p2));
-      heldWeaponDrawnBehind = true;
+    // Persistent held weapon when equipped (UP-facing, drawn behind the player).
+    if (!isNpc && renderDir === DIR.UP && !heldWeaponDrawnBehind && !weaponActive) {
+      if (weapon === "wand") {
+        drawWandHeld(drawX, drawY, renderDir, getWandSpriteForPlayer(p2));
+        heldWeaponDrawnBehind = true;
+      } else if (weapon === "spear") {
+        drawSpearHeld(drawX, drawY, renderDir, getSpearSpriteForPlayer(p2));
+        heldWeaponDrawnBehind = true;
+      } else if (weapon === "sword") {
+        drawSwordHeld(drawX, drawY, renderDir, getSwordSpriteForPlayer(p2));
+        heldWeaponDrawnBehind = true;
+      }
     }
-  }
-}
-drawSprite(bodySprite, drawX, drawY, renderDir, bodyFrame, bodyFW, bodyFH);
+    drawSprite(bodySprite, drawX, drawY, renderDir, bodyFrame, bodyFW, bodyFH);
 
     // paper-doll overlays (armor + hat)
     let armorSprite = null;
@@ -5861,13 +6493,17 @@ drawSprite(bodySprite, drawX, drawY, renderDir, bodyFrame, bodyFW, bodyFH);
     }
     // weapon visuals for players (front pass)
     if (!isNpc && weaponActive && !weaponDrawnBehind) {
-      if (weapon === "sword") drawSwordSlash(drawX, drawY, renderDir, weaponPhase01, getSwordSpriteForPlayer(p2), p2?.atkKind || null);
-      else if (weapon === "spear") drawSpearThrust(drawX, drawY, renderDir, weaponPhase01, getSpearSpriteForPlayer(p), e.id);
-      else if (weapon === "wand") drawWandCastSpark(drawX, drawY, renderDir, weaponPhase01);
+      if (weapon === "sword") {
+        drawSwordSlash(drawX, drawY, renderDir, weaponPhase01, getSwordSpriteForPlayer(p2), p2?.atkKind || null);
+      } else if (weapon === "spear") {
+        drawSpearThrust(drawX, drawY, renderDir, weaponPhase01, getSpearSpriteForPlayer(p), e.id);
+      } else if (weapon === "wand") {
+        drawWandCast(drawX, drawY, renderDir, weaponPhase01, getWandSpriteForPlayer(p));
+      }
     }
 
-    // Persistent spear when equipped (not attacking) — front pass (Left/Right/Down).
-    if (!isNpc && (!weaponActive || weapon === "wand") && !heldWeaponDrawnBehind) {
+    // Persistent weapon when equipped (not attacking) — front pass (Left/Right/Down).
+    if (!isNpc && !weaponActive && !heldWeaponDrawnBehind) {
       if (weapon === "spear") {
         drawSpearHeld(drawX, drawY, renderDir, getSpearSpriteForPlayer(p));
       } else if (weapon === "sword") {
@@ -5879,6 +6515,11 @@ drawSprite(bodySprite, drawX, drawY, renderDir, bodyFrame, bodyFW, bodyFH);
   }
 
   drawObjects("canopy");
+
+  // draw healing clouds above tree canopies
+  for (const { e, nowAbs } of cloudEntities) {
+    drawHealingCloud(e, nowAbs);
+  }
 
   // nameplates last so they never sort under canopies
   for (const np of nameplates) {

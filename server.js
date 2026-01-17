@@ -1193,6 +1193,21 @@ skill2CdUntilMs: 0,
 skill3CdUntilMs: 0,
 skill4CdUntilMs: 0,
 
+	// ===== Skill 5 (wand): Familiar =====
+	// When active, a familiar follows the player. Whenever the player hits a mob with a normal wand bolt,
+	// the familiar targets that mob and applies small damage once per second until the mob dies or a new
+	// target is assigned (by hitting a different mob). Leaving the map cancels the skill.
+	familiarActive: false,
+	familiarTargetMobId: null,
+	familiarNextAtkMs: 0,
+
+	// ===== Skill 6 (wand): Healing Cloud =====
+	// Summons a stationary cloud above the player that periodically heals them while active.
+	skill6CloudUntilMs: 0,
+	skill6NextHealMs: 0,
+	skill6CloudX: 0,
+	skill6CloudY: 0,
+
 // combat timers
 
     atkAnim: 0,
@@ -1269,8 +1284,18 @@ ws.on("message", async (buf) => {
         if (s.type === "skill" && typeof s.id === "string") {
           // Allow only known skills (extend this list as you add more)
           const sid = s.id;
-          if (sid === "skill1" || sid === "skill2" || sid === "skill3" || sid === "skill4") out[i] = { type: "skill", id: sid };
-          else out[i] = null;
+          if (
+            sid === "skill1" ||
+            sid === "skill2" ||
+            sid === "skill3" ||
+            sid === "skill4" ||
+            sid === "skill5" ||
+            sid === "skill6"
+          ) {
+            out[i] = { type: "skill", id: sid };
+          } else {
+            out[i] = null;
+          }
           continue;
         }
 
@@ -1305,6 +1330,59 @@ ws.on("message", async (buf) => {
         if (p.atkAnim <= 0) p.facing = facingFromInputs(p.inputs, p.facing);
       }
 
+      return;
+    }
+
+
+    // ===== Skill 5: Familiar (wand-only) =====
+    // Toggles a persistent familiar that will auto-attack the mob you last hit with a normal wand bolt.
+    // Leaving the map cancels the skill.
+    if (msg.type === "skill5FamiliarToggle") {
+      if (p.hp <= 0 || p.respawnIn > 0) return;
+
+      const equippedWeaponId = p.equipment?.weapon;
+      const equippedDef = equippedWeaponId ? ITEMS[equippedWeaponId] : null;
+      const weaponKey = equippedDef?.weaponKey || null;
+      if (weaponKey !== "wand") {
+        send(ws, { type: "skill5Rejected", reason: "Equip a wand to use Familiar." });
+        return;
+      }
+
+      p.familiarActive = !p.familiarActive;
+      if (!p.familiarActive) {
+        p.familiarTargetMobId = null;
+        p.familiarNextAtkMs = 0;
+        p._familiarLastTargetMobId = null;
+      }
+
+      send(ws, { type: "skill5State", active: !!p.familiarActive });
+      return;
+    }
+
+    // ===== Skill 6: Healing Cloud (wand-only) =====
+    if (msg.type === "skill6HealingCloud") {
+      if (p.hp <= 0 || p.respawnIn > 0) return;
+
+      const equippedWeaponId = p.equipment?.weapon;
+      const equippedDef = equippedWeaponId ? ITEMS[equippedWeaponId] : null;
+      const weaponKey = equippedDef?.weaponKey || null;
+      if (weaponKey !== "wand") {
+        send(ws, { type: "skill6Rejected", reason: "Equip a wand to use Healing Cloud." });
+        return;
+      }
+
+      const nowMs = Date.now();
+
+      // If already active, just ignore (client will show feedback based on timers)
+      if (p.skill6CloudUntilMs && nowMs < p.skill6CloudUntilMs) {
+        send(ws, { type: "skill6Rejected", reason: "Healing Cloud is already active." });
+        return;
+      }
+
+      p.skill6CloudUntilMs = nowMs + SKILL6_DURATION_MS;
+      p.skill6NextHealMs = nowMs + SKILL6_TICK_MS;
+      p.skill6CloudX = p.x;
+      p.skill6CloudY = p.y;
       return;
     }
 
@@ -1943,6 +2021,18 @@ if (msg.type === "skill4WideSlash") {
       p.skill1ActiveUntilMs = 0;
       p.skill1Primed = false;
 
+      // Leaving the map should keep Skill 5 toggled, but clear its current target.
+      // We leave p.familiarActive as-is and only reset target/timer.
+      p.familiarTargetMobId = null;
+      p.familiarNextAtkMs = 0;
+
+      // Leaving the map should also cancel any active Healing Cloud (Skill 6)
+      // so that it does not resume when returning to this or another map.
+      p.skill6CloudUntilMs = 0;
+      p.skill6NextHealMs = 0;
+      p.skill6CloudX = 0;
+      p.skill6CloudY = 0;
+
       p.mapId = to;
       p.x = sp.x;
       p.y = sp.y;
@@ -2193,9 +2283,22 @@ if (hasAimDir) {
         const maxRange = 360;       // px
         const lifeMs = Math.max(120, Math.floor((maxRange / speed) * 1000));
 
-        // start slightly in front of player
-        const startX = p.x + f.x * 26;
-        const startY = p.y + f.y * 26;
+        // start slightly in front of player, but biased toward the wand (lower than the face)
+        let startX = p.x + f.x * 30;
+        let startY = p.y + f.y * 30;
+
+        // Shift spawn closer to the wand / hands instead of the face.
+        if (Math.abs(f.x) > Math.abs(f.y)) {
+          // Mostly horizontal: wand is lower than the face on screen.
+          startY += 16;
+        } else {
+          // Mostly vertical: nudge slightly left/right depending on direction so it still feels like it leaves the wand.
+          if (f.y < 0) { // shooting up
+            startX += (f.x >= 0 ? 8 : -8);
+          } else if (f.y > 0) { // shooting down
+            startX += (f.x >= 0 ? 4 : -4);
+          }
+        }
 
         const nowMs = Date.now();
         const cdUntil = p.skill1CdUntilMs || 0;
@@ -2252,6 +2355,10 @@ if (msg.type === "useItem") {
 	  const p = players.get(pid);
 	  if (p) {
 		cancelSkill1ForCaster(pid);
+		// End any active familiar so it doesn't linger across sessions.
+		p.familiarActive = false;
+		p.familiarTargetMobId = null;
+		p.familiarNextAtkMs = 0;
 		await dbSavePlayer(p);  // ✅ Save state to Postgres
 		players.delete(pid);
 		console.log(`💾 Saved and removed player: ${p.name || pid}`);
@@ -2275,6 +2382,22 @@ const TICK_HZ = 30;
     const SKILL1_EFFECT_RADIUS_PX = 70;  // mobs affected within this radius of the cast center
     const SKILL1_DURATION_MS = 10_000;     // effect duration (short for testing)
     const SKILL1_COOLDOWN_MS = 5_000;     // cooldown starts when cast begins
+
+// Skill 5: Familiar (wand-only)
+// - Toggle on/off
+// - When on, the familiar targets the last mob you hit with a normal wand bolt
+// - Deals small damage once per second and provokes (aggros) the target
+const SKILL5_HIT_MS = 1000;
+const SKILL5_DMG = 3;
+const SKILL5_TRAVEL_SPEED = 260; // units/sec, used to delay first familiar hit based on distance
+
+// Skill 6: Healing Cloud (wand-only)
+// - 10 second duration
+// - Heals the caster periodically while active
+const SKILL6_DURATION_MS = 10_000;
+const SKILL6_TICK_MS = 1_000;
+const SKILL6_HEAL_PER_TICK = 3;
+const SKILL6_HEAL_RADIUS = 70;  // radius (px) around cloud center that receives healing
 
     // Active whirlpools (skill1 instances)
     // id -> { id, mapId, x, y, rad, casterId, startMs, endMs }
@@ -2460,6 +2583,17 @@ function tickStep(dt) {
           p.skill1ActiveUntilMs = 0;
           p.skill1Primed = false;
 
+          // Respawn cancels Skill 5 (Familiar).
+          p.familiarActive = false;
+          p.familiarTargetMobId = null;
+          p.familiarNextAtkMs = 0;
+
+          // Respawn cancels Skill 6 (Healing Cloud).
+          p.skill6CloudUntilMs = 0;
+          p.skill6NextHealMs = 0;
+          p.skill6CloudX = 0;
+          p.skill6CloudY = 0;
+
           if (p.save) {
             p.mapId = p.save.mapId;
             p.x = p.save.x;
@@ -2536,6 +2670,16 @@ function tickStep(dt) {
           // Skill 1 should NOT provoke/aggro mobs. Normal hits still do.
           if (!isSkill1Shot) setMobAggro(m, pr.ownerId);
 
+          // Skill 5: Familiar target assignment. Only normal wand bolts count (Skill 1 bolts don't).
+          if (!isSkill1Shot) {
+            const caster = players.get(pr.ownerId);
+            if (caster && caster.familiarActive) {
+              caster.familiarTargetMobId = m.id;
+              // Allow an immediate follow-up strike on the next familiar tick.
+              caster.familiarNextAtkMs = Date.now();
+            }
+          }
+
           // If this projectile was a primed Skill 1 shot, start the whirlpool ONLY on a successful mob hit.
           if (pr.skill1) {
             const caster = players.get(pr.ownerId);
@@ -2561,6 +2705,149 @@ function tickStep(dt) {
             killMobAndReward(m, pr.ownerId);
           }
           break;
+        }
+      }
+    }
+
+
+    // Skill 5: Familiar auto-attacks (wand-only)
+    // Notes:
+    // - The familiar is visual-only on the client; the server just stores the state.
+    // - It attacks at most once per second and always triggers mob aggro.
+    {
+      const now = nowMs;
+      for (const p of players.values()) {
+        if (!p.familiarActive) continue;
+
+        // Safety: if a player is dead/respawning, cancel the skill.
+        if (p.hp <= 0 || p.respawnIn > 0) {
+          p.familiarActive = false;
+          p.familiarTargetMobId = null;
+          p.familiarNextAtkMs = 0;
+          continue;
+        }
+
+        // If the player unequips their wand, cancel the skill.
+        {
+          const equippedWeaponId = p.equipment?.weapon;
+          const equippedDef = equippedWeaponId ? ITEMS[equippedWeaponId] : null;
+          const weaponKey = equippedDef?.weaponKey || null;
+          if (weaponKey !== "wand") {
+            p.familiarActive = false;
+            p.familiarTargetMobId = null;
+            p.familiarNextAtkMs = 0;
+            continue;
+          }
+        }
+
+        const tid = p.familiarTargetMobId;
+        if (!tid) continue;
+
+        const m = mobs.get(tid);
+        if (!m || m.mapId !== p.mapId || m.respawnIn > 0 || m.hp <= 0) {
+          p.familiarTargetMobId = null;
+          p._familiarLastTargetMobId = null;
+          continue;
+        }
+
+        // If the familiar just switched to a new target, delay the first hit
+        // based on approximate travel time from the player to the mob so the
+        // visual familiar flight and the damage feel synced.
+        if (p._familiarLastTargetMobId !== tid) {
+          const dx = (m.x ?? p.x) - p.x;
+          const dy = (m.y ?? p.y) - p.y;
+          const dist = Math.hypot(dx, dy);
+          const travelMs = (dist / SKILL5_TRAVEL_SPEED) * 1000;
+          p.familiarNextAtkMs = now + travelMs;
+          p._familiarLastTargetMobId = tid;
+        }
+
+        if (now < (p.familiarNextAtkMs || 0)) continue;
+
+        const dmg = SKILL5_DMG;
+        m.hp -= dmg;
+        m.lastHitBy = p.id;
+
+        // Familiar hits provoke the mob.
+        setMobAggro(m, p.id);
+
+        broadcastToMap(p.mapId, {
+          type: "hit",
+          targetId: m.id,
+          targetKind: "mob",
+          srcX: p.x,
+          srcY: p.y,
+          amount: dmg,
+          fx: "familiar",
+        });
+
+        // After the first hit, subsequent hits follow the base tick rate.
+        p.familiarNextAtkMs = now + SKILL5_HIT_MS;
+
+        if (m.hp <= 0) {
+          killMobAndReward(m, p.id);
+          // After the target dies, the familiar goes back to idle-following until reassigned.
+          p.familiarTargetMobId = null;
+          p._familiarLastTargetMobId = null;
+        }
+      }
+    }
+
+    // Skill 6: Healing Cloud (area heal-over-time under the cloud)
+    {
+      const now = nowMs;
+      for (const owner of players.values()) {
+        if (!owner.skill6CloudUntilMs || owner.skill6CloudUntilMs <= 0) continue;
+
+        // If owner is dead/respawning, cancel the cloud.
+        if (owner.hp <= 0 || owner.respawnIn > 0) {
+          owner.skill6CloudUntilMs = 0;
+          owner.skill6NextHealMs = 0;
+          continue;
+        }
+
+        // Expired?
+        if (now >= owner.skill6CloudUntilMs) {
+          owner.skill6CloudUntilMs = 0;
+          owner.skill6NextHealMs = 0;
+          continue;
+        }
+
+        const nextHeal = owner.skill6NextHealMs || 0;
+        if (now < nextHeal) continue;
+
+        // Schedule next tick first so we don't accidentally double-fire.
+        owner.skill6NextHealMs = now + SKILL6_TICK_MS;
+
+        const cx = owner.skill6CloudX;
+        const cy = owner.skill6CloudY;
+        if (!Number.isFinite(cx) || !Number.isFinite(cy)) continue;
+
+        const r = SKILL6_HEAL_RADIUS;
+        const r2 = r * r;
+
+        // Heal any players standing under/near the cloud on the same map.
+        for (const target of players.values()) {
+          if (target.mapId !== owner.mapId) continue;
+          if (target.maxHp <= 0 || target.hp <= 0 || target.hp >= target.maxHp) continue;
+
+          const dx = target.x - cx;
+          const dy = target.y - cy;
+          if (dx * dx + dy * dy > r2) continue;
+
+          const before = target.hp;
+          target.hp = Math.min(target.maxHp, target.hp + SKILL6_HEAL_PER_TICK);
+          const healed = target.hp - before;
+          if (healed <= 0) continue;
+
+          // Broadcast a heal event so clients can show +HP popups.
+          broadcastToMap(owner.mapId, {
+            type: "heal",
+            targetId: target.id,
+            amount: healed,
+            srcX: cx,
+            srcY: cy,
+          });
         }
       }
     }
@@ -2821,6 +3108,11 @@ setInterval(() => {
         gold: p.gold,
         weapon: p.weapon,
         equipment: p.equipment,
+        familiarActive: !!p.familiarActive,
+        familiarTargetId: p.familiarTargetMobId || null,
+        healingCloudUntilMs: p.skill6CloudUntilMs || 0,
+        healingCloudX: p.skill6CloudX ?? null,
+        healingCloudY: p.skill6CloudY ?? null,
         ...(id === pid ? { inventory: p.inventory } : {})
       };
     }
