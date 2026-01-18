@@ -2283,20 +2283,40 @@ if (hasAimDir) {
         const maxRange = 360;       // px
         const lifeMs = Math.max(120, Math.floor((maxRange / speed) * 1000));
 
-        // start slightly in front of player, but biased toward the wand (lower than the face)
-        let startX = p.x + f.x * 30;
-        let startY = p.y + f.y * 30;
+        // Compute a spawn point near the wand tip so the bolt appears to leave the wand,
+        // matching the client-side wand cast spark offsets.
+        const atkDir = p.atkDir || null;
+        let startX = p.x;
+        let startY = p.y;
 
-        // Shift spawn closer to the wand / hands instead of the face.
-        if (Math.abs(f.x) > Math.abs(f.y)) {
-          // Mostly horizontal: wand is lower than the face on screen.
-          startY += 16;
+        if (atkDir === "right") {
+          startX += -12;
+          startY += 0;
+        } else if (atkDir === "left") {
+          startX += 12;
+          startY += 0;
+        } else if (atkDir === "down") {
+          startX += -15;
+          startY += 12;
+        } else if (atkDir === "up") {
+          startX -= -10;
+          startY -= 18;
         } else {
-          // Mostly vertical: nudge slightly left/right depending on direction so it still feels like it leaves the wand.
-          if (f.y < 0) { // shooting up
-            startX += (f.x >= 0 ? 8 : -8);
-          } else if (f.y > 0) { // shooting down
-            startX += (f.x >= 0 ? 4 : -4);
+          // Fallback for diagonal or missing directions: keep the old "in front of face" behavior,
+          // but nudged a bit toward the hands.
+          startX = p.x + f.x * 30;
+          startY = p.y + f.y * 30;
+
+          if (Math.abs(f.x) > Math.abs(f.y)) {
+            // Mostly horizontal: wand is lower than the face on screen.
+            startY += 16;
+          } else {
+            // Mostly vertical: nudge slightly left/right depending on direction so it still feels like it leaves the wand.
+            if (f.y < 0) { // shooting up
+              startX += (f.x >= 0 ? 8 : -8);
+            } else if (f.y > 0) { // shooting down
+              startX += (f.x >= 0 ? 4 : -4);
+            }
           }
         }
 
@@ -2314,7 +2334,7 @@ if (hasAimDir) {
           y: startY,
           vx: f.x * speed,
           vy: f.y * speed,
-          rad: 10,
+          rad: 5,
           damage: Math.max(1, Math.floor(p.atk * 0.75)),
           lifeMs,
           // Skill 1 uses a different projectile image without affecting normal wand attacks.
@@ -2829,22 +2849,32 @@ function tickStep(dt) {
         // Heal any players standing under/near the cloud on the same map.
         for (const target of players.values()) {
           if (target.mapId !== owner.mapId) continue;
-          if (target.maxHp <= 0 || target.hp <= 0 || target.hp >= target.maxHp) continue;
+          if (target.maxHp <= 0 || target.hp <= 0) continue;
 
           const dx = target.x - cx;
           const dy = target.y - cy;
           if (dx * dx + dy * dy > r2) continue;
 
-          const before = target.hp;
-          target.hp = Math.min(target.maxHp, target.hp + SKILL6_HEAL_PER_TICK);
-          const healed = target.hp - before;
-          if (healed <= 0) continue;
+          const missing = Math.max(0, target.maxHp - target.hp);
 
-          // Broadcast a heal event so clients can show +HP popups.
+          // Amount of HP we actually restore this tick, respecting maxHp.
+          const apply = Math.min(SKILL6_HEAL_PER_TICK, missing);
+          if (apply > 0) {
+            target.hp = Math.min(target.maxHp, target.hp + apply);
+          }
+
+          // For visuals, always show at least the base tick size even if the player is already full.
+          let displayAmount = apply;
+          if (displayAmount <= 0) {
+            displayAmount = SKILL6_HEAL_PER_TICK;
+          }
+          if (!(displayAmount > 0)) continue;
+
+          // Broadcast a heal event so clients can show +HP popups / green flash.
           broadcastToMap(owner.mapId, {
             type: "heal",
             targetId: target.id,
-            amount: healed,
+            amount: displayAmount,
             srcX: cx,
             srcY: cy,
           });

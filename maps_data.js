@@ -277,36 +277,36 @@ export function makeMapD() {
     "mobType": "snail_blue",
     "tx": 6,
     "ty": 6,
-    "speedMul": 1,
-    "aggroSpeedMul": 2
+    "speedMul": 0.5,
+    "aggroSpeedMul": 1.2
   },
   {
     "mobType": "snail_blue",
     "tx": 12,
     "ty": 8,
-    "speedMul": 1,
-    "aggroSpeedMul": 2
+    "speedMul": 0.5,
+    "aggroSpeedMul": 1.2
   },
   {
     "mobType": "snail_blue",
     "tx": 18,
     "ty": 6,
-    "speedMul": 1,
-    "aggroSpeedMul": 2
+    "speedMul": 0.5,
+    "aggroSpeedMul": 1.2
   },
   {
     "mobType": "snail_red",
     "tx": 8,
     "ty": 12,
-    "speedMul": 1,
-    "aggroSpeedMul": 2
+    "speedMul": 0.6,
+    "aggroSpeedMul": 1.2
   },
   {
     "mobType": "snail_red",
     "tx": 16,
     "ty": 12,
-    "speedMul": 1,
-    "aggroSpeedMul": 2
+    "speedMul": 0.6,
+    "aggroSpeedMul": 1.2
   }
 ];
 
