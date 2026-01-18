@@ -231,6 +231,8 @@ let _lastSkill3CdUntilMs = 0;
 let skill3HotbarNackUntilMs = 0;
 let skill3HotbarShakeUntilMs = 0;
 let skill3HotbarShakeSeed = 0;
+let skill3DashOverrideDir = null; // "up" | "down" | "left" | "right" when triggered via double-tap
+
 
 function triggerSkill3HotbarNack() {
   const now = performance.now();
@@ -572,6 +574,8 @@ function activateSkillById(skillId) {
     const nowAbs = (typeof serverNowMs === "function") ? serverNowMs() : Date.now();
     if (typeof skill3CdUntilMs !== "undefined" && nowAbs < skill3CdUntilMs) {
       if (typeof triggerSkill3HotbarNack === "function") triggerSkill3HotbarNack();
+      // Consume any pending double-tap override so it doesn't leak to a future cast.
+      skill3DashOverrideDir = null;
       return false;
     }
 
@@ -586,7 +590,45 @@ function activateSkillById(skillId) {
       } else {
         hotbarToast("Equip a sword to use Skill 3");
       }
+      // Consume any pending double-tap override so it doesn't leak to a future cast.
+      skill3DashOverrideDir = null;
       return false;
+    }
+
+    // If we have a dash direction override (from double-tap), use that instead of the mouse.
+    const overrideDir = skill3DashOverrideDir;
+    skill3DashOverrideDir = null;
+
+    if (overrideDir && me) {
+      let dx = 0, dy = 0;
+      if (overrideDir === "left") dx = -1;
+      else if (overrideDir === "right") dx = 1;
+      else if (overrideDir === "up") dy = -1;
+      else if (overrideDir === "down") dy = 1;
+
+      const len = Math.hypot(dx, dy) || 1;
+      const aimDirX = dx / len;
+      const aimDirY = dy / len;
+
+      const range = 220; // arbitrary visual target distance; server uses aimDirX/aimDirY
+      const px = me.x ?? 0;
+      const py = me.y ?? 0;
+      const wx = px + aimDirX * range;
+      const wy = py + aimDirY * range;
+
+      // Update facing similar to sendSkill3DashSlashAtWorld
+      if (typeof dirFromVector === "function" && typeof getAnim === "function" && typeof myId !== "undefined") {
+        const d = dirFromVector(aimDirX, aimDirY);
+        if (d != null) {
+          const st = getAnim(myId, px, py);
+          st.dir = d;
+        }
+      }
+
+      if (typeof ws !== "undefined" && ws.readyState === 1) {
+        ws.send(JSON.stringify({ type: "skill3DashSlash", aimX: wx, aimY: wy, aimDirX, aimDirY }));
+      }
+      return true;
     }
 
     if (typeof sendSkill3DashSlashAtWorld === "function" && typeof lastAim !== "undefined" && lastAim?.has) {
@@ -600,7 +642,6 @@ function activateSkillById(skillId) {
     hotbarToast("Skill3 not available (sendSkill3DashSlash missing)");
     return false;
   }
-
 
   // Skill4: Wide Slash (sword-only)
   if (skillId === "skill4") {
@@ -759,11 +800,12 @@ function drawHotbar() {
     ctx.strokeRect(x + 0.5, y + 0.5, box - 1, box - 1);
 
     const slot = hotbarSlots[i];
+    const isDraggingThisHotbar = draggingHotbar && draggingHotbar.index === i;
 
     // Draw icon if assigned
     let drewIcon = false;
 
-    if (slot && slot.type === "skill") {
+    if (slot && !isDraggingThisHotbar && slot.type === "skill") {
       const iconImg = hotbarSkillIcons?.[slot.id] || null;
       if (iconImg && iconImg.complete && iconImg.naturalWidth > 0) {
         const ICON = 30;
@@ -772,7 +814,7 @@ function drawHotbar() {
         ctx.drawImage(iconImg, ix, iy, ICON, ICON);
         drewIcon = true;
       }
-    } else if (slot && slot.type === "item") {
+    } else if (slot && !isDraggingThisHotbar && slot.type === "item") {
       const si = resolveInventorySlotIndex(slot.itemId, slot.preferSlot);
       const it = (si >= 0) ? invSlots[si] : null;
       const qty = Number(it?.qty || 0);
@@ -843,7 +885,7 @@ function drawHotbar() {
 
 
     // Cooldown overlay (skills)
-    if (slot && slot.type === "skill") {
+    if (slot && !isDraggingThisHotbar && slot.type === "skill") {
       let lockUntil = 0;
       let totalMs = 0;
 
@@ -1241,6 +1283,8 @@ if (copied) {
 
 let invUI = null; // cached inventory UI layout for click handling
 
+let dropConfirm = null; // { slotIndex, itemId }
+
 // Inventory window (draggable)
 let invWinX = null;
 let invWinY = null;
@@ -1291,6 +1335,19 @@ let invHover = null; // { id, qty, source, rect }
 let invItemMenu = null; // { x, y, slotIndex, itemId }
 let invItemMenuUI = null; // { panel, btnUse, btnBind }
 
+let draggingInv = null; // { fromSlot, itemId }
+let invPointerDownSlot = null;
+let invPointerDownX = 0;
+let invPointerDownY = 0;
+let invPointerDownShift = false;
+const INV_DRAG_THRESHOLD = 4;
+
+let draggingHotbar = null; // { index }
+let hotbarPointerDownIndex = null;
+let hotbarPointerDownX = 0;
+let hotbarPointerDownY = 0;
+const HOTBAR_DRAG_THRESHOLD = 4;
+
 function clamp(v, a, b) { return Math.max(a, Math.min(b, v)); }
 
 function rectHit(r, mx, my) {
@@ -1333,7 +1390,7 @@ skill1IconImg.src = "/assets/skills/icons/icon_skill_blackhole.png";
 const skill2IconImg = new Image();
 skill2IconImg.src = "/assets/skills/icons/icon_skill_double_stab.png";
 const skill3IconImg = new Image();
-skill3IconImg.src = "/assets/skills/icons/icon_skill_double_stab.png";
+skill3IconImg.src = "/assets/skills/icons/icon_skill_dash_slash.png";
 
 const skill4IconImg = new Image();
 skill4IconImg.src = "/assets/skills/icons/icon_skill_big_slash.png";
@@ -1437,8 +1494,10 @@ swordSprites.training_sword.src = "/assets/training_sword.png";
 
 const wandSprites = {
   training_wand: new Image(),
+  bone_wand: new Image(),
 };
 wandSprites.training_wand.src = "/assets/training_wand.png";
+wandSprites.bone_wand.src = "/assets/bone_wand.png";
 
 function getSwordSpriteForPlayer(p) {
   const wid = p?.equipment?.weapon;
@@ -1608,6 +1667,7 @@ var equipIcons = {
   training_sword: new Image(),
   training_spear: new Image(),
   training_wand:  new Image(),
+  bone_wand:      new Image(),
   cloth_armor:    new Image(),
   cloth_hat:      new Image(),
   lucky_charm:    new Image(),
@@ -1629,6 +1689,7 @@ equipIcons.coin.src = "/assets/items/coin.png";
 equipIcons.training_sword.src = "/assets/equipment/training_sword.png";
 equipIcons.training_spear.src = "/assets/equipment/training_spear.png";
 equipIcons.training_wand.src  = "/assets/equipment/training_wand.png";
+equipIcons.bone_wand.src      = "/assets/equipment/bone_wand.png";
 equipIcons.cloth_armor.src    = "/assets/equipment/cloth_armor.png";
 equipIcons.cloth_hat.src      = "/assets/equipment/cloth_hat.png";
 equipIcons.charger_helmet.src = "/assets/equipment/charger_helmet.png";
@@ -1636,8 +1697,8 @@ equipIcons.red_duke.src       = "/assets/equipment/red_duke.png";
 equipIcons.charger_suit.src = "/assets/equipment/charger_suit.png";
 equipIcons.orange_flan.src = "/assets/items/orange_flan.png";
 equipIcons.lucky_charm.src    = "/assets/equipment/lucky_charm.png";
-equipIcons.candy_cane_spear.src = "/assets/candy_cane_spear.png";
-equipIcons.fang_spear.src       = "/assets/fang_spear.png";
+equipIcons.candy_cane_spear.src = "/assets/equipment/candy_cane_spear.png";
+equipIcons.fang_spear.src       = "/assets/equipment/fang_spear.png";
 equipIcons.potion_green.src  = "/assets/items/potion_green.png";
 equipIcons.potion_purple.src = "/assets/items/potion_purple.png";
 
@@ -1877,6 +1938,7 @@ function toggleInventory() {
     invItemMenu = null;
     invItemMenuUI = null;
     pendingItemBind = null;
+    dropConfirm = null;
   }
 
   updateInvBtnState();
@@ -3057,6 +3119,51 @@ if (msg.type === "levelup") {
 const keys = { up:false, down:false, left:false, right:false };
 let lastEPressed = 0;
 
+// Double-tap detection for Dash Slash (Skill 3, sword-only).
+// Only triggers if Skill 3 is actually bound to any hotbar slot (1–6).
+const DOUBLE_TAP_DASH_WINDOW_MS = 260;
+const lastMoveTapMs = {
+  up: 0,
+  down: 0,
+  left: 0,
+  right: 0,
+};
+
+function maybeTriggerDashSlashFromMoveKey(dir, e) {
+  // Only care about key **down**, not repeats or keyup
+  if (!e || e.repeat) return;
+
+  // Don't dash while UI overlays or editor are open
+  if (inventoryOpen || skillsOpen || monsterBookOpen || editorOpen) return;
+
+  // Respect Healing Cloud's cast lock (same behavior as hotbar usage)
+  if (skill6CastArmed && typeof performance !== "undefined") {
+    const nowUi = performance.now();
+    if (nowUi < skill6CastEndClientMs) return;
+  }
+
+  // Require Skill 3 to be actually on the hotbar (slots 1–6)
+  if (typeof hotbarKeyForSkill !== "function" || typeof useHotbarSlot !== "function") return;
+  const keyLabel = hotbarKeyForSkill("skill3");
+  if (!keyLabel) return; // not bound => no dash-on-double-tap
+
+  const now = (typeof performance !== "undefined") ? performance.now() : Date.now();
+  const last = lastMoveTapMs[dir] || 0;
+  lastMoveTapMs[dir] = now;
+
+  // Detect double-tap in the configured window
+  if (now - last <= DOUBLE_TAP_DASH_WINDOW_MS) {
+    const n = Number(keyLabel);
+    if (!Number.isFinite(n)) return;
+
+    // Set dash direction override so Skill3 uses the movement direction instead of the mouse.
+    skill3DashOverrideDir = dir;
+
+    // Use the hotbar slot directly so all cooldown / gating / flashes stay consistent
+    useHotbarSlot(n);
+  }
+}
+
 function sendInput() {
   // While channeling Healing Cloud, freeze movement inputs so the player cannot move.
   if (skill6CastArmed && typeof performance !== "undefined") {
@@ -3073,10 +3180,18 @@ function sendInput() {
 function setMoveKey(e, down) {
   if (fadeState !== "none") return;
   const k = e.key.toLowerCase();
-  if (k === "w" || e.key === "ArrowUp") keys.up = down;
-  if (k === "s" || e.key === "ArrowDown") keys.down = down;
-  if (k === "a" || e.key === "ArrowLeft") keys.left = down;
-  if (k === "d" || e.key === "ArrowRight") keys.right = down;
+  let dir = null;
+
+  if (k === "w" || e.key === "ArrowUp")  { keys.up    = down; dir = "up"; }
+  if (k === "s" || e.key === "ArrowDown"){ keys.down  = down; dir = "down"; }
+  if (k === "a" || e.key === "ArrowLeft"){ keys.left  = down; dir = "left"; }
+  if (k === "d" || e.key === "ArrowRight"){ keys.right = down; dir = "right"; }
+
+  // On key **down** for a movement key, check for double-tap dash
+  if (down && dir) {
+    maybeTriggerDashSlashFromMoveKey(dir, e);
+  }
+
   sendInput();
 }
 
@@ -3093,12 +3208,38 @@ function getMouseWorldFromEvent(e) {
 canvas.addEventListener("mousemove", (e) => {
   // Track cursor for both aiming and UI hover.
   const { mx, my, wx, wy } = getMouseWorldFromEvent(e);
+
   uiMouse.mx = mx; uiMouse.my = my; uiMouse.has = true;
   lastAim.mx = mx;
   lastAim.my = my;
   lastAim.wx = wx;
   lastAim.wy = wy;
   lastAim.has = true;
+
+  // Hotbar drag start detection (only if mouse was pressed on a hotbar slot)
+  if (hotbarPointerDownIndex != null && !draggingHotbar) {
+    const dx = mx - hotbarPointerDownX;
+    const dy = my - hotbarPointerDownY;
+    if (Math.abs(dx) > HOTBAR_DRAG_THRESHOLD || Math.abs(dy) > HOTBAR_DRAG_THRESHOLD) {
+      draggingHotbar = { index: hotbarPointerDownIndex };
+    }
+  }
+
+  // Inventory drag start detection
+  if (inventoryOpen && invUI && invPointerDownSlot != null && !draggingInv) {
+    const dx = mx - invPointerDownX;
+    const dy = my - invPointerDownY;
+    if (Math.abs(dx) > INV_DRAG_THRESHOLD || Math.abs(dy) > INV_DRAG_THRESHOLD) {
+      const me = (typeof worldPlayers !== "undefined" && typeof myId !== "undefined") ? worldPlayers?.[myId] : null;
+      const slots = me?.inventory?.slots || [];
+      const slot = slots[invPointerDownSlot];
+      if (slot) {
+        draggingInv = { fromSlot: invPointerDownSlot, itemId: slot.id };
+      } else {
+        invPointerDownSlot = null;
+      }
+    }
+  }
 });
 
 
@@ -3166,6 +3307,16 @@ function sendAttack() {
 function sendInvClick(slot) {
   if (ws.readyState !== 1) return;
   ws.send(JSON.stringify({ type: "invClick", slot }));
+}
+
+function sendInvMove(from, to) {
+  if (ws.readyState !== 1) return;
+  ws.send(JSON.stringify({ type: "invMove", from, to }));
+}
+
+function sendDropItem(slot) {
+  if (ws.readyState !== 1) return;
+  ws.send(JSON.stringify({ type: "dropItem", slot }));
 }
 
 function sendUnequip(slotName) {
@@ -3584,6 +3735,34 @@ canvas.addEventListener("mousedown", (e) => {
   const mx = e.clientX - rect.left;
   const my = e.clientY - rect.top;
 
+  // If a drop confirmation dialog is open, handle it first.
+  if (dropConfirm) {
+    const layout = getDropConfirmLayout();
+    if (layout) {
+      const { panel, btnYes, btnNo } = layout;
+
+      if (rectHit(btnYes, mx, my)) {
+        // Confirm drop
+        const slotIndex = dropConfirm.slotIndex;
+        dropConfirm = null;
+        if (Number.isInteger(slotIndex)) {
+          sendDropItem(slotIndex);
+        }
+        return;
+      }
+
+      if (rectHit(btnNo, mx, my) || rectHit(panel, mx, my)) {
+        // Cancel drop on Cancel button or clicking the panel background.
+        dropConfirm = null;
+        return;
+      }
+
+      // Click outside the dialog cancels it as well.
+      dropConfirm = null;
+      return;
+    }
+  }
+
   // If an item submenu is open, handle it first.
   if (invItemMenu && invItemMenuUI) {
     if (rectHit(invItemMenuUI.panel, mx, my)) {
@@ -3635,6 +3814,7 @@ canvas.addEventListener("mousedown", (e) => {
     }
   }
 
+
   // inventory grid
   const g = invUI.grid;
   if (mx < g.x || my < g.y || mx > g.x + g.w || my > g.y + g.h) return;
@@ -3645,19 +3825,139 @@ canvas.addEventListener("mousedown", (e) => {
 
   const slotIndex = sy * g.cols + sx;
 
-  // If this is a consumable, open the submenu instead of immediately using it.
   const me = (typeof worldPlayers !== "undefined" && typeof myId !== "undefined") ? worldPlayers?.[myId] : null;
   const slots = me?.inventory?.slots || [];
   const slot = slots[slotIndex];
 
+  // Record pointer down for potential drag or click; do not perform the action yet.
+  if (!slot) {
+    invItemMenu = null;
+    invItemMenuUI = null;
+    invPointerDownSlot = null;
+    return;
+  }
+
+  invPointerDownSlot = slotIndex;
+  invPointerDownX = mx;
+  invPointerDownY = my;
+  invPointerDownShift = !!e.shiftKey;
+
+  // Close any existing submenu; we'll reopen it on mouseup if needed.
+  invItemMenu = null;
+  invItemMenuUI = null;
+});
+
+
+
+canvas.addEventListener("mouseup", (e) => {
+  if (!inventoryOpen || !invUI) {
+    invPointerDownSlot = null;
+    invPointerDownShift = false;
+    draggingInv = null;
+    return;
+  }
+
+  // If we never pressed down inside a slot and we're not dragging, ignore.
+  if (invPointerDownSlot == null && !draggingInv) return;
+
+  const rect = canvas.getBoundingClientRect();
+  const mx = e.clientX - rect.left;
+  const my = e.clientY - rect.top;
+
+  const me = (typeof worldPlayers !== "undefined" && typeof myId !== "undefined") ? worldPlayers?.[myId] : null;
+  const slots = me?.inventory?.slots || [];
+
+  // If we are currently dragging, try to move, bind, or drop the item.
+  if (draggingInv && draggingInv.fromSlot != null) {
+    const fromSlot = draggingInv.fromSlot;
+
+    // 1) Check if we dropped onto the hotbar: bind this item to that hotbar slot.
+    const hotHit = getHotbarSlotHit(mx, my);
+    if (hotHit) {
+      const slot = slots[fromSlot];
+      const itemId = slot?.id;
+      if (itemId) {
+        // Prefer the original inventory slot index so the hotbar can re-find it later.
+        bindHotbarItem(hotHit.index + 1, itemId, fromSlot);
+      }
+      draggingInv = null;
+      invPointerDownSlot = null;
+      invPointerDownShift = false;
+      return;
+    }
+
+    // 2) If we dropped completely outside the inventory window, ask for drop confirmation.
+    if (invWinX != null && invWinY != null && invWinW > 0 && invWinH > 0) {
+      const insideInv =
+        mx >= invWinX && mx <= invWinX + invWinW &&
+        my >= invWinY && my <= invWinY + invWinH;
+
+      if (!insideInv) {
+        const slot = slots[fromSlot];
+        const itemId = slot?.id;
+        if (slot && itemId) {
+          dropConfirm = { slotIndex: fromSlot, itemId };
+        }
+        draggingInv = null;
+        invPointerDownSlot = null;
+        invPointerDownShift = false;
+        return;
+      }
+    }
+
+    // 3) Otherwise, try to move the item between inventory slots.
+    let toSlot = null;
+
+    // First, try to resolve a grid slot based purely on the cursor position,
+    // so that dropping onto an *empty* cell still counts.
+    const g = invUI.grid;
+    if (mx >= g.x && my >= g.y && mx <= g.x + g.w && my <= g.y + g.h) {
+      const sx = Math.floor((mx - g.x) / g.slotSize);
+      const sy = Math.floor((my - g.y) / g.slotSize);
+      if (sx >= 0 && sy >= 0 && sx < g.cols && sy < g.rows) {
+        toSlot = sy * g.cols + sx;
+      }
+    }
+
+    // Fallback: use getInventoryHover in case the helper has extra logic,
+    // but only care about "grid" sources.
+    if (toSlot == null) {
+      const hover = getInventoryHover(mx, my, me?.inventory, me?.equipment, me);
+      if (hover && hover.source === "grid") {
+        toSlot = hover.slotIndex;
+      }
+    }
+
+    if (Number.isInteger(toSlot) && toSlot >= 0 && toSlot < slots.length && toSlot !== fromSlot) {
+      sendInvMove(fromSlot, toSlot);
+    }
+
+    draggingInv = null;
+    invPointerDownSlot = null;
+    invPointerDownShift = false;
+    return;
+  }
+
+  // No drag started -> treat as a normal click.
+  const slotIndex = invPointerDownSlot;
+  invPointerDownSlot = null;
+
+  const slot = slots[slotIndex];
   if (!slot) {
     invItemMenu = null;
     invItemMenuUI = null;
     return;
   }
 
+  const g = invUI.grid;
+
+  // No drag + no modifier: treat as a normal click (use/equip/menu).
+  invPointerDownShift = false;
+
+  // If this is a consumable, open the submenu instead of immediately using it.
   if (isConsumableItemId(slot.id)) {
-    // Anchor menu near the clicked slot
+    const sx = slotIndex % g.cols;
+    const sy = Math.floor(slotIndex / g.cols);
     const slotX = g.x + sx * g.slotSize;
     const slotY = g.y + sy * g.slotSize;
 
@@ -3673,7 +3973,6 @@ canvas.addEventListener("mousedown", (e) => {
   // Non-consumables keep the old behavior (equip / etc.)
   sendInvClick(slotIndex);
 });
-
 
 canvas.addEventListener("mousedown", (e) => {
   if (!skillsOpen || !skillsUI) return;
@@ -3811,6 +4110,16 @@ canvas.addEventListener("mousedown", (e) => {
 
   const { mx, my, wx, wy } = getMouseWorldFromEvent(e);
 
+  // Hotbar press: record potential drag and block attacks while over the bar.
+  const hotHit = getHotbarSlotHit(mx, my);
+  if (hotHit && hotbarSlots[hotHit.index]) {
+    hotbarPointerDownIndex = hotHit.index;
+    hotbarPointerDownX = mx;
+    hotbarPointerDownY = my;
+    return;
+  }
+  hotbarPointerDownIndex = null;
+
   // If Skill 1 is primed, consume it on this wand shot.
   if (skill1Primed) {
     skill1Primed = false; // must press 1 again to try again (even if the shot misses)
@@ -3864,6 +4173,44 @@ window.addEventListener("mouseup", () => {
   invDragging = false;
   skillsDragging = false;
   bookDragging = false;
+
+  // Cancel any inventory drag if the mouse is released outside the canvas.
+  if (draggingInv) {
+    draggingInv = null;
+    invPointerDownSlot = null;
+    invPointerDownShift = false;
+  }
+
+  // Complete or cancel hotbar drags on mouse release.
+  if (draggingHotbar) {
+    const from = draggingHotbar.index;
+    if (typeof from === "number") {
+      if (uiMouse && uiMouse.has) {
+        const hit = getHotbarSlotHit(uiMouse.mx, uiMouse.my);
+        if (!hit) {
+          // Dropped off the bar -> clear the assignment.
+          hotbarSlots[from] = null;
+          queueHotbarSync();
+        } else {
+          const to = hit.index;
+          if (to !== from) {
+            const tmp = hotbarSlots[to];
+            hotbarSlots[to] = hotbarSlots[from];
+            hotbarSlots[from] = tmp;
+            queueHotbarSync();
+          }
+        }
+      } else {
+        // Mouseup occurred away from the canvas – treat as clearing the slot.
+        hotbarSlots[from] = null;
+        queueHotbarSync();
+      }
+    }
+    draggingHotbar = null;
+  }
+
+  // In all cases, clear any pressed-hotbar state.
+  hotbarPointerDownIndex = null;
 });
 
 /* ======================
@@ -5027,12 +5374,55 @@ itemSprites.potion_purple.src = "/assets/items/potion_purple.png";
 
 
 
+
+function getWorldDropSprite(itemId) {
+  // Prefer big held-weapon sprites for weapons so they look good on the ground.
+  if (typeof swordSprites !== "undefined" && swordSprites && swordSprites[itemId]) {
+    return swordSprites[itemId];
+  }
+  if (typeof spearSprites !== "undefined" && spearSprites && spearSprites[itemId]) {
+    return spearSprites[itemId];
+  }
+  if (typeof wandSprites !== "undefined" && wandSprites && wandSprites[itemId]) {
+    return wandSprites[itemId];
+  }
+
+  // Fallback to the same icon used in inventory/equipment; then dedicated drop sprites.
+  if (typeof getItemIconImage === "function") {
+    const icon = getItemIconImage(itemId);
+    if (icon) return icon;
+  }
+  if (typeof itemSprites !== "undefined" && itemSprites) {
+    return itemSprites[itemId] || null;
+  }
+  return null;
+}
+
 function drawItemDrop(itemId, x, y) {
-  const img = itemSprites[itemId];
-  if (!img) return;
-  if (!img.complete) return;
-  const w = 32, h = 32;
-  ctx.drawImage(img, Math.round(x - w/2), Math.round(y - h/2), w, h);
+  const img = getWorldDropSprite(itemId);
+  if (!img || !img.complete || img.naturalWidth <= 0) return;
+
+  let w = img.naturalWidth;
+  let h = img.naturalHeight;
+
+  // For big weapon sprites, gently scale them down so they don't overwhelm the tile.
+  const isWeaponSprite =
+    (typeof swordSprites !== "undefined" && swordSprites && swordSprites[itemId]) ||
+    (typeof spearSprites !== "undefined" && spearSprites && spearSprites[itemId]) ||
+    (typeof wandSprites !== "undefined" && wandSprites && wandSprites[itemId]);
+
+  if (isWeaponSprite) {
+    const maxSize = 40;
+    const scale = Math.min(1, maxSize / Math.max(w, h));
+    w = Math.round(w * scale);
+    h = Math.round(h * scale);
+  } else {
+    // Non-weapons: keep a compact footprint.
+    w = 32;
+    h = 32;
+  }
+
+  ctx.drawImage(img, Math.round(x - w / 2), Math.round(y - h / 2), w, h);
 }
 
 
@@ -5256,6 +5646,84 @@ function drawSkillHotbar() {
     shakeUntilMs: skill2HotbarShakeUntilMs,
     shakeSeed: skill2HotbarShakeSeed,
   });
+}
+
+
+function getHotbarSlotHit(mx, my) {
+  if (typeof canvas === "undefined") return null;
+  const box = 44, gap = 6;
+  const totalW = HOTBAR_SIZE * box + (HOTBAR_SIZE - 1) * gap;
+  const x0 = Math.round(canvas.width / 2 - totalW / 2);
+  const y0 = Math.round(canvas.height - box - 12);
+
+  for (let i = 0; i < HOTBAR_SIZE; i++) {
+    const x = x0 + i * (box + gap);
+    const y = y0;
+    if (mx >= x && mx <= x + box && my >= y && my <= y + box) {
+      return { index: i, x, y, w: box, h: box };
+    }
+  }
+  return null;
+}
+
+function drawDraggingIcon() {
+  if (typeof ctx === "undefined" || !uiMouse || !uiMouse.has) return;
+
+  const mx = uiMouse.mx;
+  const my = uiMouse.my;
+  const ICON = 36;
+
+  ctx.save();
+  ctx.imageSmoothingEnabled = false;
+  ctx.globalAlpha = 0.9;
+
+  // Dragging from inventory
+  if (draggingInv) {
+    const me = (typeof worldPlayers !== "undefined" && typeof myId !== "undefined")
+      ? worldPlayers?.[myId]
+      : null;
+    const slots = me?.inventory?.slots || [];
+    const slot = slots[draggingInv.fromSlot];
+    const itemId = slot?.id || draggingInv.itemId;
+    if (itemId) {
+      const img = getItemIconImage(itemId) || equipIcons[itemId];
+      if (img && img.complete && img.naturalWidth > 0) {
+        const ix = Math.round(mx - ICON / 2);
+        const iy = Math.round(my - ICON / 2);
+        ctx.drawImage(img, ix, iy, ICON, ICON);
+      }
+    }
+  }
+  // Dragging from hotbar
+  else if (draggingHotbar) {
+    const slot = hotbarSlots[draggingHotbar.index];
+    if (slot) {
+      if (slot.type === "skill") {
+        const iconImg = hotbarSkillIcons?.[slot.id] || null;
+        if (iconImg && iconImg.complete && iconImg.naturalWidth > 0) {
+          const ix = Math.round(mx - ICON / 2);
+          const iy = Math.round(my - ICON / 2);
+          ctx.drawImage(iconImg, ix, iy, ICON, ICON);
+        }
+      } else if (slot.type === "item") {
+        const me = (typeof worldPlayers !== "undefined" && typeof myId !== "undefined")
+          ? worldPlayers?.[myId]
+          : null;
+        const invSlots = me?.inventory?.slots || [];
+        const si = resolveInventorySlotIndex(slot.itemId, slot.preferSlot);
+        const it = (si >= 0) ? invSlots[si] : null;
+        const itemId = it?.id || slot.itemId;
+        const img = getItemIconImage(itemId);
+        if (img && img.complete && img.naturalWidth > 0) {
+          const ix = Math.round(mx - ICON / 2);
+          const iy = Math.round(my - ICON / 2);
+          ctx.drawImage(img, ix, iy, ICON, ICON);
+        }
+      }
+    }
+  }
+
+  ctx.restore();
 }
 
 function drawHud() {
@@ -5600,17 +6068,8 @@ function drawInventory(inv, equipment) {
     ctx.strokeRect(x, y, slotSize, slotSize);
 
     const slot = slots[i];
-    if (slot) {
-      // highlight if this exact item is equipped in any slot
-      const isEquipped = (slot.id === eq.weapon || slot.id === eq.armor || slot.id === eq.hat || slot.id === eq.accessory);
-      if (isEquipped) {
-        ctx.save();
-        ctx.globalAlpha = 0.20;
-        ctx.fillStyle = "#fff";
-        ctx.fillRect(x, y, slotSize, slotSize);
-        ctx.restore();
-      }
-
+    const isDraggingThisSlot = draggingInv && draggingInv.fromSlot === i;
+    if (slot && !isDraggingThisSlot) {
       // icon first, fallback to text if unknown
       const drew = drawItemIcon(slot.id, x, y, slotSize);
       if (!drew) {
@@ -5755,7 +6214,7 @@ const ITEM_META = {
   lucky_charm:      { slot: "accessory", kind: "Accessory" },
 };
 
-function getItemTooltipData(itemId, qty = 1) {
+function getItemTooltipData(itemId, qty = 1, hover = null) {
   const info = ITEM_INFO[itemId] || null;
   const name = (info && info.name) ? info.name : String(itemId || "Unknown");
   const desc = (info && info.desc) ? info.desc : "";
@@ -5769,6 +6228,21 @@ function getItemTooltipData(itemId, qty = 1) {
       if (typeof meta.weaponSpeed === "number") {
         const s = (Math.round(meta.weaponSpeed * 100) / 100).toString();
         metaLines.push(`Speed: ${s}x`);
+      }
+
+      // If we have hover context with rolled stats, surface them
+      if (hover && typeof hover.weaponBonus === "number") {
+        const wb = hover.weaponBonus;
+        if (wb > 0) {
+          metaLines.push(`Attack Bonus: +${wb}`);
+        } else if (wb < 0) {
+          metaLines.push(`Attack Bonus: ${wb}`);
+        } else {
+          metaLines.push("Attack Bonus: +0");
+        }
+      }
+      if (hover && typeof hover.totalAttack === "number") {
+        metaLines.push(`Attack with this weapon: ${hover.totalAttack}`);
       }
     } else if (meta.slot === "armor") {
       metaLines.push("Type: Armor");
@@ -5803,7 +6277,7 @@ function wrapTooltipText(text, maxWidthPx, font = "12px system-ui") {
   return lines;
 }
 
-function getInventoryHover(mx, my, inv, equipment) {
+function getInventoryHover(mx, my, inv, equipment, player) {
   if (!invUI) return null;
 
   // Equipment slots (only if occupied)
@@ -5812,7 +6286,38 @@ function getInventoryHover(mx, my, inv, equipment) {
     if (mx >= r.x && mx <= r.x + r.w && my >= r.y && my <= r.y + r.h) {
       const itemId = eq[slotName];
       if (!itemId) return null;
-      return { id: itemId, qty: 1, source: "equip", rect: r };
+
+      let weaponBonus = null;
+      let totalAttack = null;
+      let baseAtk = null;
+
+      if (slotName === "weapon" && player) {
+        if (typeof player.weaponBonus === "number") {
+          weaponBonus = player.weaponBonus;
+        }
+        if (typeof player.baseAtk === "number") {
+          baseAtk = player.baseAtk;
+        }
+        // fall back if baseAtk isn't present yet
+        if (baseAtk == null && typeof player.atk === "number") {
+          const wBonus = (typeof player.weaponBonus === "number") ? player.weaponBonus : 0;
+          baseAtk = player.atk - wBonus;
+        }
+        if (baseAtk != null) {
+          totalAttack = baseAtk + (weaponBonus || 0);
+        }
+      }
+
+      return {
+        id: itemId,
+        qty: 1,
+        source: "equip",
+        rect: r,
+        slotName,
+        weaponBonus,
+        totalAttack,
+        baseAtk
+      };
     }
   }
 
@@ -5829,14 +6334,50 @@ function getInventoryHover(mx, my, inv, equipment) {
   const slot = inv?.slots ? inv.slots[slotIndex] : null;
   if (!slot) return null;
 
-  const rect = { x: g.x + sx * g.slotSize, y: g.y + sy * g.slotSize, w: g.slotSize, h: g.slotSize };
-  return { id: slot.id, qty: slot.qty || 1, source: "grid", slotIndex, rect };
-}
+  const rect = {
+    x: g.x + sx * g.slotSize,
+    y: g.y + sy * g.slotSize,
+    w: g.slotSize,
+    h: g.slotSize
+  };
 
+  let weaponBonus = null;
+  let totalAttack = null;
+  let baseAtk = null;
+
+  // If this slot is a weapon, try to expose its rolled bonus + preview total attack
+  if (slot && slot.id && ITEM_META[slot.id] && ITEM_META[slot.id].slot === "weapon") {
+    if (typeof slot.weaponBonus === "number") {
+      weaponBonus = slot.weaponBonus;
+    }
+    if (player) {
+      if (typeof player.baseAtk === "number") {
+        baseAtk = player.baseAtk;
+      } else if (typeof player.atk === "number") {
+        const wBonus = (typeof player.weaponBonus === "number") ? player.weaponBonus : 0;
+        baseAtk = player.atk - wBonus;
+      }
+      if (baseAtk != null && weaponBonus != null) {
+        totalAttack = baseAtk + weaponBonus;
+      }
+    }
+  }
+
+  return {
+    id: slot.id,
+    qty: slot.qty || 1,
+    source: "grid",
+    slotIndex,
+    rect,
+    weaponBonus,
+    totalAttack,
+    baseAtk
+  };
+}
 function drawInventoryTooltip(hover, preferX, preferY) {
   if (!hover || !hover.id) return;
 
-  const { name, desc, metaLines } = getItemTooltipData(hover.id, hover.qty);
+  const { name, desc, metaLines } = getItemTooltipData(hover.id, hover.qty, hover);
 
   const PAD = 10;
   const GAP = 8;
@@ -5981,6 +6522,73 @@ function drawLevelToast() {
   ctx.fillStyle = "#fff";
   ctx.fillText(text, x, y);
   ctx.restore();
+}
+
+function drawDropConfirm() {
+  if (!dropConfirm) return;
+
+  const layout = getDropConfirmLayout();
+  if (!layout) return;
+
+  const { panel, btnYes, btnNo } = layout;
+
+  ctx.save();
+
+  // Slight dim behind panel so it stands out but doesn't fully hide the game.
+  ctx.fillStyle = "rgba(0,0,0,0.35)";
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+  // Panel
+  ctx.fillStyle = "rgba(0,0,0,0.92)";
+  ctx.fillRect(panel.x, panel.y, panel.w, panel.h);
+  ctx.strokeStyle = "rgba(255,255,255,0.35)";
+  ctx.strokeRect(panel.x + 0.5, panel.y + 0.5, panel.w - 1, panel.h - 1);
+
+  ctx.font = "14px system-ui";
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  ctx.fillStyle = "#fff";
+
+  const line1 = "Drop this item?";
+  const line2 = "Are you sure?";
+  ctx.fillText(line1, panel.x + panel.w / 2, panel.y + 28);
+  ctx.fillText(line2, panel.x + panel.w / 2, panel.y + 48);
+
+  // Buttons
+  ctx.font = "13px system-ui";
+  function drawBtn(r, label) {
+    ctx.fillStyle = "rgba(255,255,255,0.08)";
+    ctx.fillRect(r.x, r.y, r.w, r.h);
+    ctx.strokeStyle = "rgba(255,255,255,0.35)";
+    ctx.strokeRect(r.x + 0.5, r.y + 0.5, r.w - 1, r.h - 1);
+    ctx.fillStyle = "#fff";
+    ctx.fillText(label, r.x + r.w / 2, r.y + r.h / 2 + 1);
+  }
+
+  drawBtn(btnYes, "Drop");
+  drawBtn(btnNo, "Cancel");
+
+  ctx.restore();
+}
+
+function getDropConfirmLayout() {
+  if (!dropConfirm || typeof canvas === "undefined") return null;
+
+  const panelW = 260;
+  const panelH = 110;
+  const x = Math.round(canvas.width / 2 - panelW / 2);
+  const y = Math.round(canvas.height / 2 - panelH / 2);
+
+  const pad = 16;
+  const btnW = 90;
+  const btnH = 28;
+  const btnY = y + panelH - pad - btnH;
+
+  const btnYes = { x: x + pad, y: btnY, w: btnW, h: btnH };
+  const btnNo  = { x: x + panelW - pad - btnW, y: btnY, w: btnW, h: btnH };
+  const panel  = { x, y, w: panelW, h: panelH };
+
+  return { panel, btnYes, btnNo };
 }
 
 
@@ -6676,7 +7284,7 @@ const weaponBehind = (renderDir === DIR.UP) && (weapon === "sword" || weapon ===
 
     // Tooltip (on hover)
     if (uiMouse.has && invUI) {
-      invHover = getInventoryHover(uiMouse.mx, uiMouse.my, me?.inventory, me?.equipment);
+      invHover = getInventoryHover(uiMouse.mx, uiMouse.my, me?.inventory, me?.equipment, me);
       if (invHover) {
         // Prefer to the right/bottom of the cursor.
         drawInventoryTooltip(invHover, uiMouse.mx + 18, uiMouse.my + 18);
@@ -6686,6 +7294,14 @@ const weaponBehind = (renderDir === DIR.UP) && (weapon === "sword" || weapon ===
     invUI = null;
     invHover = null;
   }
+  if (draggingInv || draggingHotbar) {
+    drawDraggingIcon();
+  }
+
+  if (dropConfirm) {
+    drawDropConfirm();
+  }
+
   if (skillsOpen) {
     drawSkillsMenu();
   } else {

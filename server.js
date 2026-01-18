@@ -348,31 +348,31 @@ const MOB_DEFS = {
   // Knockback tuning is per-mob so heavier mobs are harder to shove around.
   green: {
     radius: 28, maxHp: 50,  damage: 15, xp: 1, passiveUntilHit: true,
-    knockbackThreshold: 10, knockbackDist: 110,
+    knockbackThreshold: 10, knockbackDist: 40,
   },
   pink: {
     radius: 28, maxHp: 80,  damage: 20, xp: 1, passiveUntilHit: true,
-    knockbackThreshold: 12, knockbackDist: 105,
+    knockbackThreshold: 12, knockbackDist: 40,
   },
   orange: {
     radius: 28, maxHp: 120, damage: 20, xp: 1, passiveUntilHit: true,
-    knockbackThreshold: 15, knockbackDist: 100,
+    knockbackThreshold: 15, knockbackDist: 40,
   },
   purple: {
     radius: 28, maxHp: 150, damage: 25, xp: 1, passiveUntilHit: true,
-    knockbackThreshold: 18, knockbackDist: 95,
+    knockbackThreshold: 18, knockbackDist: 40,
   },
   rainbow: {
     radius: 28, maxHp: 300, damage: 35, xp: 1, passiveUntilHit: true,
-    knockbackThreshold: 25, knockbackDist: 90,
+    knockbackThreshold: 25, knockbackDist: 40,
   },
   snail_blue: {
     radius: 28, maxHp: 180, damage: 30, xp: 1, passiveUntilHit: true,
-    knockbackThreshold: 22, knockbackDist: 85,
+    knockbackThreshold: 22, knockbackDist: 40,
   },
   snail_red: {
     radius: 28, maxHp: 220, damage: 35, xp: 1, passiveUntilHit: true,
-    knockbackThreshold: 28, knockbackDist: 80,
+    knockbackThreshold: 28, knockbackDist: 40,
   },
 };
 
@@ -593,16 +593,27 @@ function spawnCoins(mapId, x, y, amount) {
 }
 
 
-function spawnItemDrop(mapId, x, y, itemId, qty = 1) {
+function spawnItemDrop(mapId, x, y, itemId, qty = 1, extra = null) {
   const id = "d_" + newId();
-  drops.set(id, {
+
+  const drop = {
     id,
     mapId,
     x, y,
     itemId,
     qty,
     expiresAtMs: Date.now() + DROP_LIFETIME_MS
-  });
+  };
+
+  // Preserve rolled stats (e.g. weaponBonus) when explicitly provided.
+  if (extra && typeof extra === "object") {
+    if (Number.isFinite(extra.weaponBonus)) {
+      drop.weaponBonus = extra.weaponBonus;
+    }
+    // Future stat fields could be copied here as needed.
+  }
+
+  drops.set(id, drop);
   return id;
 }
 
@@ -621,7 +632,10 @@ const MOB_DROP_TABLE = {
 
   // Green slimes drop green potions 10% of the time.
   green: [
-    { itemId: "potion_green", chance: 0.3, qty: 1 },
+    { itemId: "potion_green",    chance: 0.3, qty: 1 },
+    { itemId: "training_sword",  chance: 0.1, qty: 1 },
+    { itemId: "training_spear",  chance: 0.1, qty: 1 },
+    { itemId: "training_wand",   chance: 0.1, qty: 1 },
   ],
 };
 
@@ -699,9 +713,21 @@ function maybePickupDropsForPlayer(p) {
         if (ws) send(ws, { type: "loot", kind: "gold", amount: amt, totalGold: p.gold });
       } else {
         const qty = d.qty ?? 1;
-        addItemToInventory(p, d.itemId, qty);
-        drops.delete(did);
-        if (ws) send(ws, { type: "loot", kind: "item", itemId: d.itemId, qty });
+
+        // If this is a weapon drop that already has a rolled bonus, preserve it.
+        const def = ITEMS[d.itemId];
+        let weaponBonusOverride = null;
+        if (def && def.slot === "weapon" && Number.isFinite(d.weaponBonus)) {
+          weaponBonusOverride = d.weaponBonus;
+        }
+
+        const added = addItemToInventory(p, d.itemId, qty, weaponBonusOverride);
+        if (added) {
+          drops.delete(did);
+          if (ws) send(ws, { type: "loot", kind: "item", itemId: d.itemId, qty });
+        } else {
+          // Inventory full: leave the drop on the ground so the player can make space.
+        }
       }
     }
   }
@@ -759,6 +785,7 @@ potion_purple: {
   candy_cane_spear: { id: "candy_cane_spear", name: "North Pole", type: "weapon", slot: "weapon", weaponKey: "spear", maxStack: 1 , weaponSpeed: 3 },
   fang_spear:       { id: "fang_spear",       name: "Twin Fang",       type: "weapon", slot: "weapon", weaponKey: "spear", maxStack: 1 , weaponSpeed: 1.5 },
   training_wand:  { id: "training_wand",  name: "Training Wand",  type: "weapon", slot: "weapon", weaponKey: "wand",  maxStack: 1 , weaponSpeed: 1.2 },
+  bone_wand:      { id: "bone_wand",      name: "Bone Wand", type: "weapon", slot: "weapon", weaponKey: "wand",  maxStack: 1 , weaponSpeed: 1.2 },
   cloth_armor:   { id: "cloth_armor",   name: "Apprentice Robe",   type: "armor",     slot: "armor",     maxStack: 1 },
   charger_suit: { id: "charger_suit", name: "Charger Suit", type: "armor", slot: "armor", maxStack: 1 },
   cloth_hat:     { id: "cloth_hat",     name: "Apprentice Hat",     type: "hat",       slot: "hat",       maxStack: 1 },
@@ -773,11 +800,11 @@ function isHealingConsumable(def) {
   return id === "potion_small" || id === "potion_green" || id === "potion_purple";
 }
 
-function addItemToInventory(p, itemId, amount) {
+function addItemToInventory(p, itemId, amount, weaponBonusOverride = null) {
   const def = ITEMS[itemId];
   if (!def || amount <= 0) return false;
 
-  // stack first
+  // First try to stack into existing stacks (for stackable items like coins, potions, etc.)
   for (const slot of p.inventory.slots) {
     if (slot && slot.id === itemId && slot.qty < def.maxStack) {
       const space = def.maxStack - slot.qty;
@@ -788,16 +815,74 @@ function addItemToInventory(p, itemId, amount) {
     }
   }
 
-  // empty slots
+  // Then fill empty slots with new stacks.
+  // Weapons get their random roll the moment they enter the inventory,
+  // so the client can show their stats on hover. If a specific roll is provided
+  // (e.g. from a dropped weapon with an existing bonus), preserve that instead.
   for (let i = 0; i < p.inventory.slots.length && amount > 0; i++) {
     if (!p.inventory.slots[i]) {
       const add = Math.min(def.maxStack, amount);
-      p.inventory.slots[i] = { id: itemId, qty: add };
+
+      if (def.slot === "weapon") {
+        let bonus;
+        if (Number.isFinite(weaponBonusOverride)) {
+          bonus = weaponBonusOverride;
+        } else {
+          bonus = rollWeaponBonus(itemId);
+        }
+
+        p.inventory.slots[i] = {
+          id: itemId,
+          qty: add,
+          weaponBonus: bonus,
+        };
+      } else {
+        p.inventory.slots[i] = { id: itemId, qty: add };
+      }
+
       amount -= add;
     }
   }
 
   return amount === 0;
+}
+
+
+
+// === Gear randomization helpers (local-only for now) ===
+function randIntInclusive(min, max) {
+  const lo = Math.floor(min);
+  const hi = Math.floor(max);
+  if (hi <= lo) return lo;
+  const span = hi - lo;
+  return lo + Math.floor(Math.random() * (span + 1));
+}
+
+// For now we only randomize weapon attack bonus.
+// Ranges are small so balance stays close to your current numbers.
+function rollWeaponBonus(itemId) {
+  switch (itemId) {
+    case "training_sword":
+    case "training_spear":
+    case "training_wand":
+      return randIntInclusive(0, 2);    // 0–2 bonus
+    case "bone_wand":
+      return randIntInclusive(1, 3);    // slightly stronger than training wand
+    case "fang_spear":
+      return randIntInclusive(1, 4);    // slightly better roll
+    case "candy_cane_spear":
+      return randIntInclusive(1, 3);
+    default:
+      return 0; // hats/armor/etc for now
+  }
+}
+
+// Compute the player's effective attack, including weapon bonus.
+function getPlayerAttack(p) {
+  const base = Number.isFinite(p.atk) ? p.atk : 0;
+  const bonus = Number.isFinite(p.weaponBonus) ? p.weaponBonus : 0;
+  const total = base + bonus;
+  return total > 0 ? total : 1;
 }
 
 
@@ -1161,6 +1246,7 @@ wss.on("connection", (ws) => {
     xp: 0,
     xpNext: xpToNext(1),
     atk: 10,
+    weaponBonus: 0,
     // Basic attack can hit this many mobs (mastery can raise this)
     basicHitCap: 1,
     hp: 100,
@@ -1177,7 +1263,7 @@ wss.on("connection", (ws) => {
     hotbar: new Array(6).fill(null),
 
     // inventory (server authoritative)
-    inventory: { size: 24, slots: [ { id: "training_sword", qty: 1 }, { id: "training_spear", qty: 1 }, { id: "candy_cane_spear", qty: 1 }, { id: "fang_spear", qty: 1 }, { id: "training_wand", qty: 1 }, { id: "cloth_armor", qty: 1 }, { id: "charger_suit", qty: 1 }, { id: "cloth_hat", qty: 1 }, { id: "charger_helmet", qty: 1 }, { id: "lucky_charm", qty: 1 },{ id: "potion_green", qty: 2 },{ id: "potion_purple", qty: 2 },, ...Array(19).fill(null) ] },
+    inventory: { size: 24, slots: [ { id: "training_sword", qty: 1 },, ...Array(22).fill(null) ] },
 
 // quests (server authoritative)
 quests: { jangoon_red_duke: { started: false, 
@@ -1519,6 +1605,8 @@ if (msg.type === "skill2DoubleStab") {
   // Broadcast for visuals (map-scoped)
   broadcastToMap(p.mapId, { type: "skill2Fx", casterId: p.id, startMs });
 
+  const baseAtk = getPlayerAttack(p);
+
   // Helper: apply one stab with slight "jut"
   const applyStab = (stabIndex) => {
     // Animate like a regular spear attack (client reads p.atkAnim)
@@ -1540,7 +1628,7 @@ if (msg.type === "skill2DoubleStab") {
       if (m.hp <= 0) continue;
 
       if (meleeHitTestDir(p, m, dir, OFFSET, RADIUS)) {
-        const dmg = Math.max(1, Math.floor(p.atk * 0.9));
+        const dmg = Math.max(1, Math.floor(baseAtk * 0.9));
         m.hp -= dmg;
         m.lastHitBy = p.id;
 
@@ -1604,6 +1692,8 @@ if (msg.type === "skill3DashSlash") {
     return;
   }
 
+  const baseAtk = getPlayerAttack(p);
+
   const startMs = nowMs;
   p.skill3CdUntilMs = startMs + SKILL3_COOLDOWN_MS;
 
@@ -1651,7 +1741,7 @@ if (msg.type === "skill3DashSlash") {
   // Dash contact damage: as you pass through/near mobs during the dash, apply a small hit once per mob.
   // This makes the skill feel reliable even if you end up on the far side of a target.
   const dashHitMobIds = new Set();
-  const dashDmg = Math.max(1, Math.floor(p.atk * SKILL3_DASH_DAMAGE_MULT));
+  const dashDmg = Math.max(1, Math.floor(baseAtk * SKILL3_DASH_DAMAGE_MULT));
 
   // Dash forward in small steps so we don't "phase" through walls.
   const f = norm(p.facing || { x: 0, y: 1 });
@@ -1706,7 +1796,7 @@ if (msg.type === "skill3DashSlash") {
   p.atkCd = Math.max(p.atkCd || 0, SKILL3_ATK_LOCK_SEC);
 
   // Apply a stronger sword slash at the end of the dash
-  const dmg = Math.max(1, Math.floor(p.atk * SKILL3_DAMAGE_MULT));
+  const dmg = Math.max(1, Math.floor(baseAtk * SKILL3_DAMAGE_MULT));
   for (const m of mobs.values()) {
     if (m.mapId !== p.mapId) continue;
     if (m.respawnIn > 0) continue;
@@ -1813,7 +1903,7 @@ if (msg.type === "skill4WideSlash") {
 
   // Apply hits: up to SKILL4_MAX_HITS mobs using the extended sword test
   let hits = 0;
-  const dmg = p.atk;
+  const dmg = getPlayerAttack(p);
 
   const candidates = [];
   for (const m of mobs.values()) {
@@ -1870,27 +1960,52 @@ if (msg.type === "skill4WideSlash") {
 
       // Equip if the item is equippable
       if (def.slot === "weapon" || def.slot === "armor" || def.slot === "hat" || def.slot === "accessory") {
-        // Only allow equipping single items (maxStack 1). If somehow stacked, equip one.
         const equipSlot = def.slot;
 
-        // If slot already occupied, swap it back into inventory (if space)
-        const currentlyEquippedId = p.equipment[equipSlot];
-        if (currentlyEquippedId) {
-          // find empty slot
-          const empty = p.inventory.slots.findIndex(s => !s);
-          if (empty === -1) return; // no room to swap
-          p.inventory.slots[empty] = { id: currentlyEquippedId, qty: 1 };
+        // Capture outgoing equipped item BEFORE mutating inventory
+        const outgoingId = p.equipment[equipSlot];
+        const outgoingWeaponBonus =
+          (equipSlot === "weapon" && Number.isFinite(p.weaponBonus)) ? p.weaponBonus : null;
+
+        // Determine weapon roll BEFORE mutating the stack
+        let newWeaponBonus = 0;
+        if (equipSlot === "weapon") {
+          if (Number.isFinite(stack.weaponBonus)) {
+            newWeaponBonus = stack.weaponBonus;
+          } else {
+            newWeaponBonus = rollWeaponBonus(def.id);
+          }
         }
 
-        // remove one from inventory slot
-        if (stack.qty > 1) stack.qty -= 1;
-        else p.inventory.slots[slotIndex] = null;
+        // Remove one item from inventory slot
+        if (stack.qty > 1) {
+          stack.qty -= 1;
+          if (equipSlot === "weapon" && !Number.isFinite(stack.weaponBonus)) {
+            stack.weaponBonus = newWeaponBonus;
+          }
+        } else {
+          p.inventory.slots[slotIndex] = null;
+        }
 
+        // Place outgoing equipped item into the SAME inventory slot
+        if (outgoingId) {
+          if (equipSlot === "weapon") {
+            p.inventory.slots[slotIndex] = {
+              id: outgoingId,
+              qty: 1,
+              weaponBonus: outgoingWeaponBonus || 0
+            };
+          } else {
+            p.inventory.slots[slotIndex] = { id: outgoingId, qty: 1 };
+          }
+        }
+
+        // Equip new item
         p.equipment[equipSlot] = def.id;
 
-        // Back-compat: set active weapon key for combat pipeline
         if (equipSlot === "weapon") {
           p.weapon = def.weaponKey || "sword";
+          p.weaponBonus = newWeaponBonus;
         }
         return;
       }
@@ -1904,6 +2019,42 @@ if (msg.type === "skill4WideSlash") {
       }
       return;
     }
+    if (msg.type === "dropItem") {
+      if (p.hp <= 0 || p.respawnIn > 0) return;
+      const slotIndex = Number(msg.slot);
+      if (!Number.isFinite(slotIndex) || slotIndex < 0 || slotIndex >= p.inventory.slots.length) return;
+      const stack = p.inventory.slots[slotIndex];
+      if (!stack) return;
+
+      const def = ITEMS[stack.id];
+      if (!def) return;
+
+      const qty = stack.qty ?? 1;
+      if (qty <= 0) return;
+
+      // Spawn the dropped items a short distance in front of the player so they
+      // don't get auto-picked up immediately by the pickup radius.
+      let dropX = p.x;
+      let dropY = p.y;
+      const fx = p.facing && Number.isFinite(p.facing.x) ? p.facing.x : 0;
+      const fy = p.facing && Number.isFinite(p.facing.y) ? p.facing.y : 0;
+      const DROP_DIST = 28;
+      if (fx !== 0 || fy !== 0) {
+        dropX += fx * DROP_DIST;
+        dropY += fy * DROP_DIST;
+      } else {
+        dropX += DROP_DIST;
+      }
+
+      spawnItemDrop(p.mapId, dropX, dropY, stack.id, qty, {
+        weaponBonus: stack.weaponBonus
+      });
+
+      // Clear the inventory slot.
+      p.inventory.slots[slotIndex] = null;
+      return;
+    }
+
 
     if (msg.type === "unequip") {
       if (p.hp <= 0 || p.respawnIn > 0) return;
@@ -1916,7 +2067,17 @@ if (msg.type === "skill4WideSlash") {
       const empty = p.inventory.slots.findIndex(s => !s);
       if (empty === -1) return; // inventory full
 
-      p.inventory.slots[empty] = { id: equippedId, qty: 1 };
+      const slot = { id: equippedId, qty: 1 };
+
+      if (slotName === "weapon") {
+        // Preserve the current weapon roll when putting it back into the bag.
+        if (Number.isFinite(p.weaponBonus)) {
+          slot.weaponBonus = p.weaponBonus;
+        }
+        p.weaponBonus = 0;
+      }
+
+      p.inventory.slots[empty] = slot;
       p.equipment[slotName] = null;
 
       if (slotName === "weapon") {
@@ -1925,7 +2086,28 @@ if (msg.type === "skill4WideSlash") {
       return;
     }
 
-    if (msg.type === "editTile") {
+    
+    if (msg.type === "invMove") {
+      if (p.hp <= 0 || p.respawnIn > 0) return;
+      const from = Number(msg.from);
+      const to = Number(msg.to);
+      if (!Number.isFinite(from) || !Number.isFinite(to)) return;
+      if (from === to) return;
+
+      const slots = p.inventory && Array.isArray(p.inventory.slots) ? p.inventory.slots : null;
+      if (!slots) return;
+      if (from < 0 || from >= slots.length || to < 0 || to >= slots.length) return;
+
+      const fromStack = slots[from];
+      const toStack = slots[to];
+      if (!fromStack && !toStack) return;
+
+      slots[from] = toStack || null;
+      slots[to] = fromStack || null;
+      return;
+    }
+
+if (msg.type === "editTile") {
       if (!ENABLE_MAP_EDITOR) return;
 
       // Only allow editing the map you're currently on.
@@ -2104,6 +2286,8 @@ if (msg.type === "skill4WideSlash") {
       const weaponKey = equippedDef?.weaponKey || null;
       if (!weaponKey) return;
 
+      const baseAtk = getPlayerAttack(p);
+
       // Skill 1 can only be fired through a wand projectile. If the player attacks with anything else,
       // drop any primed state so they must press 1 again.
       if (weaponKey !== "wand" && p.skill1Primed) p.skill1Primed = false;
@@ -2194,11 +2378,11 @@ if (hasAimDir) {
           if (hits >= hitCap) break;
           hits++;
 
-          m.hp -= p.atk;
+          m.hp -= baseAtk;
           m.lastHitBy = p.id;
 
           // Big knockback if this single hit is strong enough.
-          maybeBigKnockback(m, p.x, p.y, p.atk);
+          maybeBigKnockback(m, p.x, p.y, baseAtk);
 
           // Any mob you hit becomes "provoked" and will chase you even if you're outside base aggro.
           setMobAggro(m, p.id);
@@ -2209,7 +2393,7 @@ if (hasAimDir) {
             targetKind: "mob",
             srcX: p.x,
             srcY: p.y,
-            amount: p.atk,
+            amount: baseAtk,
             fx: "slash",
           });
 
@@ -2248,7 +2432,7 @@ if (hasAimDir) {
           if (hits >= hitCap) break;
           hits++;
 
-          const dmg = Math.max(1, Math.floor(p.atk * 0.9)); // slightly less than sword
+          const dmg = Math.max(1, Math.floor(baseAtk * 0.9)); // slightly less than sword
           m.hp -= dmg;
           m.lastHitBy = p.id;
 
@@ -2335,7 +2519,7 @@ if (hasAimDir) {
           vx: f.x * speed,
           vy: f.y * speed,
           rad: 5,
-          damage: Math.max(1, Math.floor(p.atk * 0.75)),
+          damage: Math.max(1, Math.floor(baseAtk * 0.75)),
           lifeMs,
           // Skill 1 uses a different projectile image without affecting normal wand attacks.
           sprite: wantsSkill1 ? "skill1_projectile" : "wand_projectile",
@@ -2399,7 +2583,7 @@ const TICK_HZ = 30;
        SKILLS (server authoritative)
     ====================== */
     const SKILL1_RANGE_PX = 150;          // targeting radius from caster
-    const SKILL1_EFFECT_RADIUS_PX = 70;  // mobs affected within this radius of the cast center
+    const SKILL1_EFFECT_RADIUS_PX = 40;  // mobs affected within this radius of the cast center
     const SKILL1_DURATION_MS = 10_000;     // effect duration (short for testing)
     const SKILL1_COOLDOWN_MS = 5_000;     // cooldown starts when cast begins
 
@@ -3126,11 +3310,15 @@ setInterval(() => {
     const ps = {};
     for (const [id, p] of players) {
       if (p.mapId !== mapId) continue;
+      const totalAtk = (typeof getPlayerAttack === "function") ? getPlayerAttack(p) : (Number.isFinite(p.atk) ? p.atk : 0);
       ps[id] = {
         name: p.name,
         x: p.x, y: p.y,
         hp: p.hp, maxHp: p.maxHp,
         level: p.level, xp: p.xp, xpNext: p.xpNext,
+        atk: totalAtk,
+        baseAtk: Number.isFinite(p.atk) ? p.atk : 0,
+        weaponBonus: Number.isFinite(p.weaponBonus) ? p.weaponBonus : 0,
         atkAnim: p.atkAnim,
         atkDir: p.atkDir,
         atkKind: p.atkKind || null,
