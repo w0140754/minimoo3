@@ -559,11 +559,22 @@ function killMobAndReward(m, killerId) {
     recordMonsterBookKill(killer, m.mobType);
   }
 
-  const coins = 2 + Math.floor(Math.random() * 4);
-  
-	spawnCoins(m.mapId, m.x, m.y, coins);
-	rollMobDrops(m);
+  // When a mob dies, scatter its drops slightly so they don't all overlap.
+  // We still respect collision: drops will never be placed directly on a
+  // blocked tile (wall/solid object). If no nearby free spot is found,
+  // we fall back to the mob's exact position.
+  const baseX = m.x;
+  const baseY = m.y;
+  const mapId = m.mapId;
+  let dropIndex = 0;
 
+  const coins = 2 + Math.floor(Math.random() * 4);
+  if (coins > 0) {
+    const pos = findDropScatterPos(mapId, baseX, baseY, dropIndex++);
+    spawnCoins(mapId, pos.x, pos.y, coins);
+  }
+
+  dropIndex = rollMobDrops(m, dropIndex, baseX, baseY);
 
   m.deadAtMs = Date.now();
   m.corpseUntilMs = m.deadAtMs + 2000;
@@ -575,8 +586,12 @@ function killMobAndReward(m, killerId) {
    LOOT (COINS)
 ====================== */
 const drops = new Map(); // dropId -> {id,mapId,x,y,itemId,qty,amount?,expiresAtMs}
-const DROP_LIFETIME_MS = 12000;
+const DROP_LIFETIME_MS = 15000;
 const PICKUP_RADIUS = 22;
+// Vertical tweak so pickup distance matches where drops appear on-screen.
+// Drops are drawn slightly above their world center, so bias the pickup point
+// upward a bit to match the visual.
+const DROP_PICKUP_Y_OFFSET = 16;
 
 function spawnCoins(mapId, x, y, amount) {
   const id = "d_" + newId();
@@ -619,6 +634,39 @@ function spawnItemDrop(mapId, x, y, itemId, qty = 1, extra = null) {
 
 
 // ======================
+// Choose a nearby position for a mob drop so that multiple drops from
+// one kill are visually spread out, without placing any drop directly on a
+// blocked tile. The index parameter is used to rotate through a small set
+// of radial offsets so each additional drop fans out around the corpse.
+function findDropScatterPos(mapId, baseX, baseY, index = 0) {
+  const OFFSETS = [
+    { x: 0,  y: 0 },   // center
+    { x: 28, y: 0 },   // right
+    { x: -28, y: 0 },  // left
+    { x: 0,  y: 28 },  // down
+    { x: 0,  y: -28 }, // up
+    { x: 20, y: 20 },  // down-right
+    { x: -20, y: 20 }, // down-left
+    { x: 20, y: -20 }, // up-right
+    { x: -20, y: -20 } // up-left
+  ];
+
+  const n = OFFSETS.length || 1;
+  index = Math.max(0, index | 0);
+
+  // Try offsets in a rotated order so each drop from the same mob
+  // tends to pick a different slot.
+  for (let i = 0; i < n; i++) {
+    const off = OFFSETS[(index + i) % n];
+    const x = baseX + off.x;
+    const y = baseY + off.y;
+    if (!isBlocked(mapId, x, y)) return { x, y };
+  }
+
+  // Fallback: if every candidate is blocked, just return the corpse center.
+  return { x: baseX, y: baseY };
+}
+
 // MOB DROPS (future-proof)
 // - Add drops per mobType here.
 // - Each entry is rolled independently.
@@ -673,11 +721,15 @@ function resolveDropQty(qtySpec) {
   return min + Math.floor(Math.random() * (max - min + 1));
 }
 
-function rollMobDrops(m) {
-  if (!m) return;
+function rollMobDrops(m, dropIndex = 0, baseX = null, baseY = null) {
+  if (!m) return dropIndex;
 
   const dropsForType = MOB_DROP_TABLE[m.mobType];
-  if (!dropsForType || dropsForType.length === 0) return;
+  if (!dropsForType || dropsForType.length === 0) return dropIndex;
+
+  const mapId = m.mapId;
+  const cx = Number.isFinite(baseX) ? baseX : m.x;
+  const cy = Number.isFinite(baseY) ? baseY : m.y;
 
   for (const d of dropsForType) {
     if (!d?.itemId) continue;
@@ -692,8 +744,11 @@ function rollMobDrops(m) {
     // Safety: only drop items that exist in ITEMS table
     if (!ITEMS[d.itemId]) continue;
 
-    spawnItemDrop(m.mapId, m.x, m.y, d.itemId, qty);
+    const pos = findDropScatterPos(mapId, cx, cy, dropIndex++);
+    spawnItemDrop(mapId, pos.x, pos.y, d.itemId, qty);
   }
+
+  return dropIndex;
 }
 
 
@@ -703,7 +758,10 @@ function maybePickupDropsForPlayer(p) {
   for (const [did, d] of drops) {
     if (d.expiresAtMs <= nowMs) { drops.delete(did); continue; }
     if (d.mapId !== p.mapId) continue;
-    if (dist(p.x, p.y, d.x, d.y) <= PICKUP_RADIUS) {
+    // Use a slightly raised pickup point so the collision matches where
+    // the drop is actually drawn on the map (instead of feeling "below").
+    const pickupY = d.y - DROP_PICKUP_Y_OFFSET;
+    if (dist(p.x, p.y, d.x, pickupY) <= PICKUP_RADIUS) {
       const ws = idToSocket.get(p.id);
       if ((d.itemId || "coin") === "coin") {
         const amt = d.amount ?? d.qty ?? 1;
