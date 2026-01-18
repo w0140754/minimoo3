@@ -916,6 +916,12 @@ function randIntInclusive(min, max) {
   return lo + Math.floor(Math.random() * (span + 1));
 }
 
+// Back-compat helper: some combat code uses randInt(min, max) for inclusive rolls.
+// Keep it as an alias so older snippets don't crash.
+function randInt(min, max) {
+  return randIntInclusive(min, max);
+}
+
 // For now we only randomize weapon attack bonus.
 // Ranges are small so balance stays close to your current numbers.
 function rollWeaponBonus(itemId) {
@@ -1003,6 +1009,16 @@ function swordHitTest(p, m) {
     if (dist(cx, cy, m.x, m.y) <= (t.rad + mr)) return true;
   }
   return false;
+}
+
+// Spear is a straight thrust.
+// Use the same hitbox values the client debug overlay expects:
+//   DBG_SPEAR_OFFSET = 50
+//   DBG_SPEAR_R      = 32
+function spearHitTest(p, m) {
+  const OFFSET = 50;
+  const RADIUS = 32;
+  return meleeHitTest(p, m, OFFSET, RADIUS);
 }
 
 function swordHitTestSkill4(p, m) {
@@ -1249,6 +1265,255 @@ function initStaticEntitiesFromTemplates() {
 
 initStaticEntitiesFromTemplates();
 
+// Basic attack input lock (server-authoritative)
+// - Freezes movement briefly when a basic attack is accepted
+// - Locks facing direction to the attack direction for the same window
+const BASIC_ATK_LOCK_MS = 300;
+
+// Shared basic-attack handler so we can trigger attacks both from explicit client clicks
+// and from server-side "hold-to-attack" repeat.
+function attemptBasicAttack(ws, p, msg, nowMs = Date.now()) {
+  if (!p) return false;
+  if (p.hp <= 0 || p.respawnIn > 0) return false;
+
+  // Respect server-authoritative lock window
+  if (nowMs < (p.basicAtkLockUntilMs || 0)) return false;
+  if (p.atkCd > 0) return false;
+
+  // Require an equipped weapon to attack
+  const equippedWeaponId = p.equipment?.weapon;
+  const equippedDef = equippedWeaponId ? ITEMS[equippedWeaponId] : null;
+  const weaponKey = equippedDef?.weaponKey || null;
+  if (!weaponKey) return false;
+
+  const baseAtk = getPlayerAttack(p);
+
+  // Skill 1 can only be fired through a wand projectile. If the player attacks with anything else,
+  // drop any primed state so they must press 1 again.
+  if (weaponKey !== "wand" && p.skill1Primed) p.skill1Primed = false;
+
+  // shared animation time (client uses this for sword/spear/wand “active”)
+  p.atkAnim = 0.18;
+  // Default attack kind is a normal/basic swing (no special visuals)
+  p.atkKind = null;
+
+  // weapon cooldowns (anti-spam)
+  // NOTE: This is the *authoritative* lockout.
+  const baseDelaySec = 1.0; // all weapons are balanced around 1 basic attack per second
+  const weaponSpeed = Number(equippedDef?.weaponSpeed) || 1;
+  const finalDelaySec = baseDelaySec / Math.max(0.05, weaponSpeed);
+  p.atkCd = finalDelaySec;
+
+  // Freeze + facing lock window
+  p.basicAtkLockUntilMs = nowMs + BASIC_ATK_LOCK_MS;
+
+  // Optional aim from client.
+  // We prefer aimDirX/aimDirY when provided because they are derived from the player's
+  // on-screen position and are not affected by camera smoothing lag.
+  const aimDirX = Number(msg?.aimDirX);
+  const aimDirY = Number(msg?.aimDirY);
+  const hasAimDir = Number.isFinite(aimDirX) && Number.isFinite(aimDirY) && (Math.abs(aimDirX) + Math.abs(aimDirY) > 1e-6);
+
+  const aimX = Number(msg?.aimX);
+  const aimY = Number(msg?.aimY);
+  const hasAim = Number.isFinite(aimX) && Number.isFinite(aimY);
+
+  if (hasAimDir) {
+    const dx = aimDirX;
+    const dy = aimDirY;
+    const ax = Math.abs(dx);
+    const ay = Math.abs(dy);
+
+    if (weaponKey === "wand") {
+      const f = norm({ x: dx, y: dy });
+      p.facing = f;
+    } else {
+      if (ax > ay) p.facing = { x: dx >= 0 ? 1 : -1, y: 0 };
+      else if (ay > 0) p.facing = { x: 0, y: dy >= 0 ? 1 : -1 };
+    }
+  } else if (hasAim) {
+    const dx = aimX - p.x;
+    const dy = aimY - p.y;
+    const ax = Math.abs(dx);
+    const ay = Math.abs(dy);
+
+    if (weaponKey === "wand") {
+      const f = norm({ x: dx, y: dy });
+      if (Math.abs(f.x) + Math.abs(f.y) > 0) p.facing = f;
+    } else {
+      if (ax > ay) p.facing = { x: dx >= 0 ? 1 : -1, y: 0 };
+      else if (ay > 0) p.facing = { x: 0, y: dy >= 0 ? 1 : -1 };
+    }
+  }
+
+  // Cache a discrete attack direction for clients (used for rendering during atkAnim and lock window).
+  // This prevents the weapon sprite from snapping to the movement direction mid-swing.
+  {
+    const fx = p.facing?.x ?? 0;
+    const fy = p.facing?.y ?? 0;
+    const ax = Math.abs(fx);
+    const ay = Math.abs(fy);
+    if (ax > ay) p.atkDir = (fx >= 0 ? "right" : "left");
+    else if (ay > 0) p.atkDir = (fy >= 0 ? "down" : "up");
+    // else keep previous
+  }
+
+  // === BEGIN original basic-attack resolution ===
+  // SWORD: wide slash hitbox
+  if (weaponKey === "sword") {
+    // Basic attacks normally hit 1 target; mastery can raise p.basicHitCap to 2/3/4...
+    const hitCap = Math.max(1, p.basicHitCap ?? 1);
+
+    const candidates = [];
+    for (const m of mobs.values()) {
+      if (m.mapId !== p.mapId) continue;
+      if (m.respawnIn > 0) continue;
+      if (m.hp <= 0) continue;
+
+      if (swordHitTest(p, m)) {
+        candidates.push(m);
+      }
+    }
+
+    // closest first, then hit up to cap
+    candidates.sort((a, b) => dist(p.x, p.y, a.x, a.y) - dist(p.x, p.y, b.x, b.y));
+
+    let hits = 0;
+    for (const m of candidates) {
+      if (hits >= hitCap) break;
+      // Use inclusive roll helper (and avoid relying on randInt being present in older builds)
+      const dmg = randIntInclusive(baseAtk - 2, baseAtk + 2);
+      m.hp -= dmg;
+      m.lastHitBy = p.id;
+
+      // Big knockback if this single hit is strong enough.
+      maybeBigKnockback(m, p.x, p.y, dmg);
+
+      // Basic attacks should provoke aggro.
+      setMobAggro(m, p.id);
+
+      broadcastToMap(p.mapId, {
+        type: "hit",
+        targetId: m.id,
+        targetKind: "mob",
+        srcX: p.x,
+        srcY: p.y,
+        amount: dmg,
+        fx: "slash",
+      });
+
+      if (m.hp <= 0) {
+        killMobAndReward(m, p.id);
+      }
+      hits++;
+    }
+
+    return true;
+  }
+
+  // SPEAR: thrust hitbox
+  if (weaponKey === "spear") {
+    // Basic attacks normally hit 1 target; mastery can raise p.basicHitCap to 2/3/4...
+    const hitCap = Math.max(1, p.basicHitCap ?? 1);
+
+    const candidates = [];
+    for (const m of mobs.values()) {
+      if (m.mapId !== p.mapId) continue;
+      if (m.respawnIn > 0) continue;
+      if (m.hp <= 0) continue;
+
+      if (spearHitTest(p, m)) {
+        candidates.push(m);
+      }
+    }
+
+    candidates.sort((a, b) => dist(p.x, p.y, a.x, a.y) - dist(p.x, p.y, b.x, b.y));
+
+    let hits = 0;
+    for (const m of candidates) {
+      if (hits >= hitCap) break;
+      // Use inclusive roll helper (and avoid relying on randInt being present in older builds)
+      const dmg = randIntInclusive(baseAtk - 2, baseAtk + 2);
+      m.hp -= dmg;
+      m.lastHitBy = p.id;
+
+      // Big knockback if this single hit is strong enough.
+      maybeBigKnockback(m, p.x, p.y, dmg);
+
+      // Basic attacks should provoke aggro.
+      setMobAggro(m, p.id);
+
+      broadcastToMap(p.mapId, {
+        type: "hit",
+        targetId: m.id,
+        targetKind: "mob",
+        srcX: p.x,
+        srcY: p.y,
+        amount: dmg,
+        fx: "stab",
+      });
+
+      if (m.hp <= 0) {
+        killMobAndReward(m, p.id);
+      }
+      hits++;
+    }
+
+    return true;
+  }
+
+  // WAND: projectile
+  if (weaponKey === "wand") {
+    // Skill 1 is a primed wand shot that creates a whirlpool on mob-hit.
+    // We only allow it if the skill isn't on cooldown at the moment of firing.
+    const cdUntil = p.skill1CdUntilMs || 0;
+    const wantsSkill1 = !!p.skill1Primed && nowMs >= cdUntil;
+    // Consume the primed state on the first wand shot after pressing 1.
+    // If this projectile misses, cooldown will NOT start (only starts on hit when whirlpool begins).
+    if (p.skill1Primed) p.skill1Primed = false;
+
+    const speed = 520;
+    const lifeMs = 650;
+    const f = norm({ x: p.facing.x, y: p.facing.y });
+
+    // Spawn slightly offset so the bolt originates closer to the wand/hand.
+    let startX = p.x;
+    let startY = p.y;
+    const atkDir = p.atkDir || "down";
+    if (atkDir === "right") {
+      startX += -15;
+      startY += 0;
+    } else if (atkDir === "left") {
+      startX -= 15;
+      startY += 0;
+    } else if (atkDir === "down") {
+      startX += -15;
+      startY += 12;
+    } else if (atkDir === "up") {
+      startX += 10;
+      startY -= 18;
+    }
+
+    spawnProjectile({
+      mapId: p.mapId,
+      ownerId: p.id,
+      x: startX,
+      y: startY,
+      vx: f.x * speed,
+      vy: f.y * speed,
+      rad: 5,
+      damage: Math.max(1, Math.floor(baseAtk * 0.75)),
+      lifeMs,
+      sprite: wantsSkill1 ? "skill1_projectile" : "wand_projectile",
+      skill1: wantsSkill1
+    });
+
+    return true;
+  }
+
+  return true;
+}
+
 
 function respawnMob(m) {
   // Prefer curated spawn points (if provided in maps_data.js mobSpawns)
@@ -1358,6 +1623,13 @@ skill4CdUntilMs: 0,
     atkCd: 0,
     atkKind: null,
     invuln: 0,
+
+    // basic attack movement/facing lock window (ms timestamp)
+    basicAtkLockUntilMs: 0,
+
+    // hold-to-attack state (mouse held)
+    attackHeld: false,
+    attackHeldAim: null,
 
     // portal anti-loop (ms timestamp). We now spawn ON portal tiles, so we prevent instant re-use.
     portalCdUntilMs: 0,
@@ -1470,8 +1742,12 @@ ws.on("message", async (buf) => {
       // update facing only when some direction is pressed
       const hasDir = p.inputs.up || p.inputs.down || p.inputs.left || p.inputs.right;
       if (hasDir) {
-        // Don't let movement inputs overwrite the attack-facing while an attack animation is active.
-        if (p.atkAnim <= 0) p.facing = facingFromInputs(p.inputs, p.facing);
+        // Don't let movement inputs overwrite the attack-facing while an attack animation OR
+        // basic-attack lock window is active.
+        const nowMs = Date.now();
+        if (p.atkAnim <= 0 && nowMs >= (p.basicAtkLockUntilMs || 0)) {
+          p.facing = facingFromInputs(p.inputs, p.facing);
+        }
       }
 
       return;
@@ -2333,263 +2609,49 @@ if (msg.type === "editTile") {
       return;
     }
 
-    if (msg.type === "attack") {
-      if (p.hp <= 0 || p.respawnIn > 0) return;
-      if (p.atkCd > 0) return;
+    // Hold-to-attack support (mouse button held).
+    // Client sends:
+    //  - {type: "attackHold", down: true/false, aimX/aimY or aimDirX/aimDirY}
+    //  - {type: "attackHoldAim", aimX/aimY or aimDirX/aimDirY}
+    if (msg.type === "attackHold") {
+      const down = !!msg.down;
+      p.attackHeld = down;
 
-
-      // Require an equipped weapon to attack
-      const equippedWeaponId = p.equipment?.weapon;
-      const equippedDef = equippedWeaponId ? ITEMS[equippedWeaponId] : null;
-      const weaponKey = equippedDef?.weaponKey || null;
-      if (!weaponKey) return;
-
-      const baseAtk = getPlayerAttack(p);
-
-      // Skill 1 can only be fired through a wand projectile. If the player attacks with anything else,
-      // drop any primed state so they must press 1 again.
-      if (weaponKey !== "wand" && p.skill1Primed) p.skill1Primed = false;
-      // shared animation time (client uses this for sword/spear/wand “active”)
-      p.atkAnim = 0.18;
-      // Default attack kind is a normal/basic swing (no special visuals)
-      p.atkKind = null;
-
-      // weapon cooldowns (anti-spam)
-      // NOTE: This is the *authoritative* lockout. The client should only animate when it sees atkAnim > 0 in snapshots.
-      const baseDelaySec = 1.0; // all weapons are balanced around 1 basic attack per second
-      const weaponSpeed = Number(equippedDef?.weaponSpeed) || 1;
-      const finalDelaySec = baseDelaySec / Math.max(0.05, weaponSpeed);
-      p.atkCd = finalDelaySec;
-      // Optional aim from client.
-// We prefer aimDirX/aimDirY when provided because they are derived from the player's
-// on-screen position and are not affected by camera smoothing lag.
-const aimDirX = Number(msg.aimDirX);
-const aimDirY = Number(msg.aimDirY);
-const hasAimDir = Number.isFinite(aimDirX) && Number.isFinite(aimDirY) && (Math.abs(aimDirX) + Math.abs(aimDirY) > 1e-6);
-
-const aimX = Number(msg.aimX);
-const aimY = Number(msg.aimY);
-const hasAim = Number.isFinite(aimX) && Number.isFinite(aimY);
-
-if (hasAimDir) {
-  const dx = aimDirX;
-  const dy = aimDirY;
-  const ax = Math.abs(dx);
-  const ay = Math.abs(dy);
-
-  if (weaponKey === "wand") {
-    const f = norm({ x: dx, y: dy });
-    p.facing = f;
-  } else {
-    if (ax > ay) p.facing = { x: dx >= 0 ? 1 : -1, y: 0 };
-    else if (ay > 0) p.facing = { x: 0, y: dy >= 0 ? 1 : -1 };
-  }
-} else if (hasAim) {
-  const dx = aimX - p.x;
-  const dy = aimY - p.y;
-  const ax = Math.abs(dx);
-  const ay = Math.abs(dy);
-
-  if (weaponKey === "wand") {
-    const f = norm({ x: dx, y: dy });
-    if (Math.abs(f.x) + Math.abs(f.y) > 0) p.facing = f;
-  } else {
-    if (ax > ay) p.facing = { x: dx >= 0 ? 1 : -1, y: 0 };
-    else if (ay > 0) p.facing = { x: 0, y: dy >= 0 ? 1 : -1 };
-  }
-}
-
-            // Cache a discrete attack direction for clients (used for rendering during atkAnim).
-      // This prevents the weapon sprite from snapping to the movement direction mid-swing.
-      {
-        const fx = p.facing?.x ?? 0;
-        const fy = p.facing?.y ?? 0;
-        const ax = Math.abs(fx);
-        const ay = Math.abs(fy);
-        if (ax > ay) p.atkDir = (fx >= 0 ? "right" : "left");
-        else if (ay > 0) p.atkDir = (fy >= 0 ? "down" : "up");
-        // else keep previous
-      }
-
-// SWORD: wide slash hitbox
-      if (weaponKey === "sword") {
-        // Basic attacks normally hit 1 target; mastery can raise p.basicHitCap to 2/3/4...
-        const hitCap = Math.max(1, p.basicHitCap ?? 1);
-
-        const candidates = [];
-        for (const m of mobs.values()) {
-          if (m.mapId !== p.mapId) continue;
-          if (m.respawnIn > 0) continue;
-          if (m.hp <= 0) continue;
-
-          if (swordHitTest(p, m)) {
-            const dx = m.x - p.x;
-            const dy = m.y - p.y;
-            candidates.push({ m, d2: dx * dx + dy * dy });
-          }
-        }
-
-        candidates.sort((a, b) => a.d2 - b.d2);
-
-        let hits = 0;
-        for (const { m } of candidates) {
-          if (hits >= hitCap) break;
-          hits++;
-
-          m.hp -= baseAtk;
-          m.lastHitBy = p.id;
-
-          // Big knockback if this single hit is strong enough.
-          maybeBigKnockback(m, p.x, p.y, baseAtk);
-
-          // Any mob you hit becomes "provoked" and will chase you even if you're outside base aggro.
-          setMobAggro(m, p.id);
-
-          broadcastToMap(p.mapId, {
-            type: "hit",
-            targetId: m.id,
-            targetKind: "mob",
-            srcX: p.x,
-            srcY: p.y,
-            amount: baseAtk,
-            fx: "slash",
-          });
-
-          if (m.hp <= 0) {
-            killMobAndReward(m, p.id);
-          }
-        }
+      if (!down) {
+        p.attackHeldAim = null;
         return;
       }
 
-      // SPEAR: longer offset, tighter radius (feels like a poke)
-      if (weaponKey === "spear") {
-        const OFFSET = 50;
-        const RADIUS = 32;
+      const aim = {};
+      if (Number.isFinite(Number(msg.aimX))) aim.aimX = Number(msg.aimX);
+      if (Number.isFinite(Number(msg.aimY))) aim.aimY = Number(msg.aimY);
+      if (Number.isFinite(Number(msg.aimDirX))) aim.aimDirX = Number(msg.aimDirX);
+      if (Number.isFinite(Number(msg.aimDirY))) aim.aimDirY = Number(msg.aimDirY);
+      p.attackHeldAim = aim;
 
-        // Basic attacks normally hit 1 target; mastery can raise p.basicHitCap to 2/3/4...
-        const hitCap = Math.max(1, p.basicHitCap ?? 1);
-
-        const candidates = [];
-        for (const m of mobs.values()) {
-          if (m.mapId !== p.mapId) continue;
-          if (m.respawnIn > 0) continue;
-          if (m.hp <= 0) continue;
-
-          if (meleeHitTest(p, m, OFFSET, RADIUS)) {
-            const dx = m.x - p.x;
-            const dy = m.y - p.y;
-            candidates.push({ m, d2: dx * dx + dy * dy });
-          }
-        }
-
-        candidates.sort((a, b) => a.d2 - b.d2);
-
-        let hits = 0;
-        for (const { m } of candidates) {
-          if (hits >= hitCap) break;
-          hits++;
-
-          const dmg = Math.max(1, Math.floor(baseAtk * 0.9)); // slightly less than sword
-          m.hp -= dmg;
-          m.lastHitBy = p.id;
-
-          // Big knockback if this single hit is strong enough.
-          maybeBigKnockback(m, p.x, p.y, dmg);
-
-          setMobAggro(m, p.id);
-
-          broadcastToMap(p.mapId, {
-            type: "hit",
-            targetId: m.id,
-            targetKind: "mob",
-            srcX: p.x,
-            srcY: p.y,
-            amount: dmg,
-            fx: "stab",
-          });
-
-          if (m.hp <= 0) {
-            killMobAndReward(m, p.id);
-          }
-        }
-        return;
-      }
-
-      // WAND: spawn a projectile
-      if (weaponKey === "wand") {
-        const f = norm(p.facing || { x: 0, y: 1 });
-
-        // range-tuned: not too far for starter wand (can be increased for stronger wands later)
-        const speed = 480;          // px/s
-        const maxRange = 360;       // px
-        const lifeMs = Math.max(120, Math.floor((maxRange / speed) * 1000));
-
-        // Compute a spawn point near the wand tip so the bolt appears to leave the wand,
-        // matching the client-side wand cast spark offsets.
-        const atkDir = p.atkDir || null;
-        let startX = p.x;
-        let startY = p.y;
-
-        if (atkDir === "right") {
-          startX += -12;
-          startY += 0;
-        } else if (atkDir === "left") {
-          startX += 12;
-          startY += 0;
-        } else if (atkDir === "down") {
-          startX += -15;
-          startY += 12;
-        } else if (atkDir === "up") {
-          startX -= -10;
-          startY -= 18;
-        } else {
-          // Fallback for diagonal or missing directions: keep the old "in front of face" behavior,
-          // but nudged a bit toward the hands.
-          startX = p.x + f.x * 30;
-          startY = p.y + f.y * 30;
-
-          if (Math.abs(f.x) > Math.abs(f.y)) {
-            // Mostly horizontal: wand is lower than the face on screen.
-            startY += 16;
-          } else {
-            // Mostly vertical: nudge slightly left/right depending on direction so it still feels like it leaves the wand.
-            if (f.y < 0) { // shooting up
-              startX += (f.x >= 0 ? 8 : -8);
-            } else if (f.y > 0) { // shooting down
-              startX += (f.x >= 0 ? 4 : -4);
-            }
-          }
-        }
-
-        const nowMs = Date.now();
-        const cdUntil = p.skill1CdUntilMs || 0;
-        const wantsSkill1 = !!p.skill1Primed && nowMs >= cdUntil;
-        // Consume the primed state on the first wand shot after pressing 1.
-        // If this projectile misses, cooldown will NOT start (only starts on hit).
-        if (p.skill1Primed) p.skill1Primed = false;
-
-        spawnProjectile({
-          mapId: p.mapId,
-          ownerId: p.id,
-          x: startX,
-          y: startY,
-          vx: f.x * speed,
-          vy: f.y * speed,
-          rad: 5,
-          damage: Math.max(1, Math.floor(baseAtk * 0.75)),
-          lifeMs,
-          // Skill 1 uses a different projectile image without affecting normal wand attacks.
-          sprite: wantsSkill1 ? "skill1_projectile" : "wand_projectile",
-          skill1: wantsSkill1
-        });
-
-        return;
-      }
+      // Fire immediately on press (then server tick will keep attempting while held).
+      attemptBasicAttack(ws, p, aim, Date.now());
+      return;
     }
 
+    if (msg.type === "attackHoldAim") {
+      if (!p.attackHeld) return;
+      const aim = p.attackHeldAim || {};
+      if (Number.isFinite(Number(msg.aimX))) aim.aimX = Number(msg.aimX);
+      if (Number.isFinite(Number(msg.aimY))) aim.aimY = Number(msg.aimY);
+      if (Number.isFinite(Number(msg.aimDirX))) aim.aimDirX = Number(msg.aimDirX);
+      if (Number.isFinite(Number(msg.aimDirY))) aim.aimDirY = Number(msg.aimDirY);
+      p.attackHeldAim = aim;
+      return;
+    }
+
+    if (msg.type === "attack") {
+      attemptBasicAttack(ws, p, msg, Date.now());
+      return;
+    }
 
 if (msg.type === "useItem") {
+
   const slotIndex = (msg.slot|0);
   if (!p.inventory || !p.inventory.slots) return;
   if (slotIndex < 0 || slotIndex >= p.inventory.slots.length) return;
@@ -2870,17 +2932,33 @@ function tickStep(dt) {
           p.invuln = 0.6;
           p.atkCd = 0;
           p.atkAnim = 0;
+          p.basicAtkLockUntilMs = 0;
+          p.attackHeld = false;
+          p.attackHeldAim = null;
         }
         continue;
       }
 
       if (p.hp <= 0) continue;
 
+      const nowMs = Date.now();
+
+      // Hold-to-attack: if the player is holding the mouse button down,
+      // keep attempting basic attacks as soon as cooldown/lock allow.
+      if (p.attackHeld && p.atkCd <= 0 && nowMs >= (p.basicAtkLockUntilMs || 0)) {
+        attemptBasicAttack(null, p, p.attackHeldAim || {}, nowMs);
+      }
+
+      const locked = (nowMs < (p.basicAtkLockUntilMs || 0));
+
       let dx = 0, dy = 0;
       if (p.inputs.left) dx -= 1;
       if (p.inputs.right) dx += 1;
       if (p.inputs.up) dy -= 1;
       if (p.inputs.down) dy += 1;
+
+      // Freeze movement during the basic-attack lock window.
+      if (locked) { dx = 0; dy = 0; }
 
       const len = Math.hypot(dx, dy);
       if (len > 0) { dx /= len; dy /= len; }
@@ -3380,6 +3458,7 @@ setInterval(() => {
         atkAnim: p.atkAnim,
         atkDir: p.atkDir,
         atkKind: p.atkKind || null,
+        basicAtkLockUntilMs: p.basicAtkLockUntilMs || 0,
         facing: p.facing,
         gold: p.gold,
         weapon: p.weapon,

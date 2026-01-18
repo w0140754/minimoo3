@@ -3290,6 +3290,46 @@ function sendAttackAtWorld(wx, wy, mx = null, my = null, extra = null) {
   wsSend(payload);
 }
 
+// Hold-to-attack (mouse button held): server-authoritative repeat respecting weapon attack speed.
+let attackHoldDown = false;
+let _lastAttackHoldAimSentMs = 0;
+
+function sendAttackHoldState(down, wx, wy, mx = null, my = null) {
+  if (ws.readyState !== 1) return;
+  const aim = calcAimFromWorld(wx, wy, mx, my);
+  if (!aim) return;
+  ws.send(JSON.stringify({
+    type: "attackHold",
+    down: !!down,
+    aimX: wx,
+    aimY: wy,
+    aimDirX: aim.aimDirX,
+    aimDirY: aim.aimDirY,
+  }));
+}
+
+function sendAttackHoldAim(wx, wy, mx = null, my = null) {
+  if (ws.readyState !== 1) return;
+  const now = performance.now();
+  // Light throttle so we don't spam aim updates.
+  if (now - _lastAttackHoldAimSentMs < 50) return;
+  _lastAttackHoldAimSentMs = now;
+  const aim = calcAimFromWorld(wx, wy, mx, my);
+  if (!aim) return;
+  ws.send(JSON.stringify({
+    type: "attackHoldAim",
+    aimX: wx,
+    aimY: wy,
+    aimDirX: aim.aimDirX,
+    aimDirY: aim.aimDirY,
+  }));
+}
+
+function sendAttackHoldStop() {
+  if (ws.readyState !== 1) return;
+  ws.send(JSON.stringify({ type: "attackHold", down: false }));
+}
+
 function sendAttack() {
   const me = worldPlayers[myId];
   const wid = me?.equipment?.weapon;
@@ -4123,6 +4163,10 @@ canvas.addEventListener("mousedown", (e) => {
   hotbarPointerDownIndex = null;
 
   // If Skill 1 is primed, consume it on this wand shot.
+  // Also start hold-to-attack so subsequent basic attacks repeat while the button stays down.
+  attackHoldDown = true;
+  sendAttackHoldState(true, wx, wy, mx, my);
+
   if (skill1Primed) {
     skill1Primed = false; // must press 1 again to try again (even if the shot misses)
     const me = worldPlayers[myId];
@@ -4130,6 +4174,8 @@ canvas.addEventListener("mousedown", (e) => {
     if (weaponKey !== "wand") {
       levelToastText = "Equip a wand to use Skill 1";
       levelToastUntilMs = performance.now() + 1500;
+      attackHoldDown = false;
+      sendAttackHoldState(false, wx, wy, mx, my);
       return;
     }
     sendAttackAtWorld(wx, wy, mx, my, { skill1: true });
@@ -4137,6 +4183,16 @@ canvas.addEventListener("mousedown", (e) => {
   }
 
   sendAttackAtWorld(wx, wy, mx, my);
+});
+
+// While holding the mouse button to attack, stream aim updates to the server.
+// This lets the player "drag" their aim without releasing the click.
+window.addEventListener("mousemove", (e) => {
+  if (!attackHoldDown) return;
+  // Don't send aim updates while interacting with the in-canvas editor.
+  if (editorOpen) return;
+  const { mx, my, wx, wy } = getMouseWorldFromEvent(e);
+  sendAttackHoldAim(wx, wy, mx, my);
 });
 
 
@@ -4171,7 +4227,13 @@ window.addEventListener("wheel", (e) => {
 }, { passive: false });
 
 
-window.addEventListener("mouseup", () => {
+window.addEventListener("mouseup", (e) => {
+  // Stop hold-to-attack on left button release.
+  if (attackHoldDown && (!e || e.button === 0)) {
+    attackHoldDown = false;
+    sendAttackHoldStop();
+  }
+
   invDragging = false;
   skillsDragging = false;
   bookDragging = false;
@@ -7095,8 +7157,12 @@ const cloudEntities = [];
     const p = isNpc ? null : worldPlayers[e.id];
 
     // attack-active flag (used to suppress idle pose while swinging)
+    // Also honor the server-authoritative basic-attack lock so the client doesn't
+    // "walk in place" or turn early while the server is freezing movement/facing.
     const serverAtkAnim = p ? (p.atkAnim || 0) : 0;
-    const attacking = (serverAtkAnim > 0);
+    const lockUntilMs = (!isNpc && p && typeof p.basicAtkLockUntilMs === "number") ? p.basicAtkLockUntilMs : 0;
+    const lockActive = (!isNpc && lockUntilMs > serverNowMs());
+    const attacking = (serverAtkAnim > 0) || lockActive;
 
     // match the movement test used by updateAnim()
     let movingNow = (e.id === myId)
@@ -7111,6 +7177,11 @@ const cloudEntities = [];
           movingNow = false;
         }
       }
+    }
+
+    // While basic-attack locked, force local player to appear stationary
+    if (!isNpc && e.id === myId && lockActive) {
+      movingNow = false;
     }
 
     const idlePose = (!isNpc) && (!movingNow) && (!attacking);
@@ -7148,7 +7219,7 @@ const cloudEntities = [];
 
         // Use an attack-locked direction while the weapon animation is active.
 renderDir = st.dir;
-if (!isNpc && weaponActive) {
+if (!isNpc && (weaponActive || lockActive)) {
   const wp = worldPlayers[e.id];
     const atkDirStr = wp && wp.atkDir;
     if (atkDirStr) {
