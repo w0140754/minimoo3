@@ -1681,9 +1681,9 @@ var equipIcons = {
   potion_purple: new Image(),
 };
 
-// coin icon (used by drops list; safe if missing)
+// coin icon (used by drops list + inventory; safe if missing)
 equipIcons.coin = new Image();
-equipIcons.coin.src = "/assets/items/coin.png";
+equipIcons.coin.src = "/assets/items/gold_coin.png";
 
 
 equipIcons.training_sword.src = "/assets/equipment/training_sword.png";
@@ -2104,6 +2104,7 @@ let worldMobs = {};
 const MOB_SPAWN_FADE_MS = 200; // how long mobs fade in after spawning/respawning
 const mobSpawnAtMs = new Map(); // mobId -> performance.now() when it became alive
 let worldDrops = {};
+const dropAnim = new Map(); // dropId -> { spawnUiMs, seed } for hop + bob
 let worldProjectiles = {};
 let whirlpools = []; // active skill1 vortices from server [{x,y,rad,endMs,...}]
 
@@ -2910,7 +2911,8 @@ if (Array.isArray(msg.whirlpools)) whirlpools = msg.whirlpools;
     const prevMobs = worldMobs;
     worldMobs = msg.mobs || {};
     worldDrops = msg.drops || {};
-	worldProjectiles = msg.projectiles || {};
+    syncDropAnimFromSnapshot(worldDrops);
+    worldProjectiles = msg.projectiles || {};
 
     // Skill 6: Healing Cloud – capture our own active-until timer from snapshot
     if (typeof myId !== "undefined" && worldPlayers) {
@@ -5025,7 +5027,7 @@ function drawProjectile(pr) {
 
     ctx.save();
     ctx.imageSmoothingEnabled = false;
-    ctx.drawImage(img, Math.round(x - w / 2), Math.round(y - h / 2), w, h);
+    ctx.drawImage(img, Math.round(x - w / 2), Math.round(y - h), w, h);
     ctx.restore();
     return;
   }
@@ -5339,28 +5341,43 @@ if (elapsedMs >= HEALING_CLOUD_FADE_MS) {
    COIN DRAW
 ====================== */
 function drawCoin(x, y, amount) {
-  x = Math.round(x); y = Math.round(y);
+  // Treat (x, y) as the ground contact point. The coin sprite's bottom
+  // sits on y, so tall items and coins share the same "foot" position.
+  x = Math.round(x);
+  y = Math.round(y);
 
-  const cx = x - 5;
-  const cy = y + 10;
+  const size = 24;
+  const top = y - size;
+  const left = x - size / 2;
 
   ctx.save();
-  ctx.fillStyle = "rgba(0,0,0,0.6)";
-  ctx.fillRect(cx - 1, cy - 1, 12, 12);
 
-  ctx.fillStyle = "#f1c40f";
-  ctx.fillRect(cx + 2, cy + 1, 6, 8);
-  ctx.fillStyle = "#ffd966";
-  ctx.fillRect(cx + 3, cy + 2, 4, 6);
+  const img = equipIcons && equipIcons.coin;
+  if (img && img.complete && img.naturalWidth > 0) {
+    ctx.imageSmoothingEnabled = false;
+    ctx.drawImage(
+      img,
+      Math.round(left),
+      Math.round(top),
+      size,
+      size
+    );
+  } else {
+    // Fallback: simple pixel coin if the image isn't loaded yet.
+    const iLeft = Math.round(left);
+    const iTop = Math.round(top);
+    ctx.fillStyle = "rgba(0,0,0,0.6)";
+    ctx.fillRect(iLeft + 2, iTop + 2, size - 4, size - 4);
 
-  if (amount >= 4) {
-    ctx.font = "10px system-ui";
-    ctx.textBaseline = "top";
-    ctx.fillStyle = "#fff";
-    ctx.fillText(String(amount), cx + 12, cy + 1);
+    ctx.fillStyle = "#f1c40f";
+    ctx.fillRect(iLeft + 4, iTop + 4, size - 8, size - 8);
+    ctx.fillStyle = "#ffd966";
+    ctx.fillRect(iLeft + 6, iTop + 6, size - 12, size - 12);
   }
+
   ctx.restore();
 }
+
 
 var itemSprites = {
   orange_flan: new Image(),
@@ -5398,12 +5415,71 @@ function getWorldDropSprite(itemId) {
   return null;
 }
 
-function drawItemDrop(itemId, x, y) {
+
+// ======================
+// DROP ANIMATION HELPERS
+// ======================
+const DROP_SPAWN_HOP_MS = 260;    // duration of the initial hop (ms)
+const DROP_HOP_HEIGHT   = 12;     // pixels of vertical hop
+const DROP_BOB_AMPLITUDE = 3;     // ongoing bob amplitude (px)
+const DROP_BOB_PERIOD_MS = 900;   // bob period (ms)
+const DROP_PULSE_SCALE   = 0.06;  // +/- scale pulse after spawn
+
+// Keep dropAnim in sync with snapshot data from the server.
+function syncDropAnimFromSnapshot(dropsObj) {
+  const nowUi = (typeof performance !== "undefined") ? performance.now() : Date.now();
+  const seen = new Set();
+
+  for (const [id, d] of Object.entries(dropsObj || {})) {
+    seen.add(id);
+    if (!dropAnim.has(id)) {
+      dropAnim.set(id, {
+        spawnUiMs: nowUi,
+        seed: Math.random() * Math.PI * 2, // per-drop phase for bobbing
+      });
+    }
+  }
+
+  // Remove animation entries for drops that no longer exist
+  for (const id of dropAnim.keys()) {
+    if (!seen.has(id)) dropAnim.delete(id);
+  }
+}
+
+// Compute current visual state (offset/scale) for a drop.
+function getDropAnimState(id, d) {
+  const nowUi = (typeof performance !== "undefined") ? performance.now() : Date.now();
+  const anim = dropAnim.get(id);
+  const spawnMs = anim ? anim.spawnUiMs : nowUi;
+  const seed = anim ? anim.seed : 0;
+  const age = Math.max(0, nowUi - spawnMs);
+
+  let offsetY = 0;       // how many pixels to lift above the base y
+  let scale   = 1.0;     // 1 = normal size
+
+  if (age < DROP_SPAWN_HOP_MS) {
+    // Initial hop: fast up then down (sin curve 0→π)
+    const t = clamp(age / DROP_SPAWN_HOP_MS, 0, 1);
+    const hop = Math.sin(t * Math.PI); // 0 → 1 → 0
+    offsetY = DROP_HOP_HEIGHT * hop;
+    scale   += 0.12 * hop;             // tiny scale pop
+  } else {
+    // Gentle idle bob after the hop finishes
+    const tBob = (age - DROP_SPAWN_HOP_MS) / DROP_BOB_PERIOD_MS;
+    const bob = Math.sin(tBob * Math.PI * 2 + seed);
+    offsetY = DROP_BOB_AMPLITUDE * bob;
+    scale   += DROP_PULSE_SCALE * bob;
+  }
+
+  return { offsetY, scale };
+}
+
+function drawItemDrop(itemId, x, y, scale = 1) {
   const img = getWorldDropSprite(itemId);
   if (!img || !img.complete || img.naturalWidth <= 0) return;
 
-  let w = img.naturalWidth;
-  let h = img.naturalHeight;
+  let baseW = img.naturalWidth;
+  let baseH = img.naturalHeight;
 
   // For big weapon sprites, gently scale them down so they don't overwhelm the tile.
   const isWeaponSprite =
@@ -5413,16 +5489,20 @@ function drawItemDrop(itemId, x, y) {
 
   if (isWeaponSprite) {
     const maxSize = 40;
-    const scale = Math.min(1, maxSize / Math.max(w, h));
-    w = Math.round(w * scale);
-    h = Math.round(h * scale);
+    const s = Math.min(1, maxSize / Math.max(baseW, baseH));
+    baseW = Math.round(baseW * s);
+    baseH = Math.round(baseH * s);
   } else {
     // Non-weapons: keep a compact footprint.
-    w = 32;
-    h = 32;
+    baseW = 32;
+    baseH = 32;
   }
 
-  ctx.drawImage(img, Math.round(x - w / 2), Math.round(y - h / 2), w, h);
+  const s2 = scale || 1;
+  const w = Math.round(baseW * s2);
+  const h = Math.round(baseH * s2);
+
+  ctx.drawImage(img, Math.round(x - w / 2), Math.round(y - h), w, h);
 }
 
 
@@ -5959,7 +6039,7 @@ function drawInventory(inv, equipment) {
 
   // Inventory grid layout
   const gridX = startX + PAD;
-  const gridY = eqY + slotSize + 26;
+  const gridY = eqY + slotSize + 38;
 
   const panelH = (gridY + rows * slotSize + PAD) - startY;
 
@@ -6725,10 +6805,39 @@ function loop(nowMs) {
   // drawObjects("below"); // non-canopy objects are now depth-sorted with entities
 
   // drops behind entities
-  for (const d of Object.values(worldDrops)) {
+  // Draw in ascending y so objects lower on the screen appear "in front".
+  const dropEntries = Object.entries(worldDrops);
+  dropEntries.sort(([, a], [, b]) => {
+    const ay = (a && typeof a.y === "number") ? a.y : 0;
+    const by = (b && typeof b.y === "number") ? b.y : 0;
+    return ay - by;
+  });
+
+  for (const [id, d] of dropEntries) {
     const itemId = d.itemId || "coin";
-    if (itemId === "coin") drawCoin(d.x, d.y, d.amount || d.qty || 1);
-    else drawItemDrop(itemId, d.x, d.y);
+
+    // Base ground contact point from the server.
+    const gx = Math.round(d.x);
+    const gy = Math.round(d.y);
+
+    // Animate only the sprite (hop + bob), not the shadow.
+    const { offsetY, scale } = getDropAnimState(id, d);
+    const spriteY = Math.round(gy - offsetY); // positive offsetY lifts the sprite up
+
+    // Simple per-drop shadow that stays anchored to the ground.
+    ctx.save();
+    ctx.globalAlpha = 0.4;
+    ctx.fillStyle = "#000000";
+    ctx.beginPath();
+    ctx.ellipse(gx, gy + 3, 10, 4, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+
+    if (itemId === "coin") {
+      drawCoin(gx, spriteY, d.amount || d.qty || 1);
+    } else {
+      drawItemDrop(itemId, gx, spriteY, scale);
+    }
   }
 
   // projectiles behind entities (feels good for bolts)
