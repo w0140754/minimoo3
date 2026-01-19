@@ -839,8 +839,9 @@ potion_purple: {
   
   // equipment (MapleStory-style)
   training_sword: { id: "training_sword", name: "Training Sword", type: "weapon", slot: "weapon", weaponKey: "sword", maxStack: 1 , weaponSpeed: 1.5 },
+  branch_sword: { id: "branch_sword", name: "Tree Branch", type: "weapon", slot: "weapon", weaponKey: "sword", maxStack: 1 , weaponSpeed: 1.5 },
   training_spear: { id: "training_spear", name: "Training Spear", type: "weapon", slot: "weapon", weaponKey: "spear", maxStack: 1 , weaponSpeed: 1.5 },
-  candy_cane_spear: { id: "candy_cane_spear", name: "North Pole", type: "weapon", slot: "weapon", weaponKey: "spear", maxStack: 1 , weaponSpeed: 3 },
+  candy_cane_spear: { id: "candy_cane_spear", name: "North Pole", type: "weapon", slot: "weapon", weaponKey: "spear", maxStack: 1 , weaponSpeed: 1.5 },
   fang_spear:       { id: "fang_spear",       name: "Twin Fang",       type: "weapon", slot: "weapon", weaponKey: "spear", maxStack: 1 , weaponSpeed: 1.5 },
   training_wand:  { id: "training_wand",  name: "Training Wand",  type: "weapon", slot: "weapon", weaponKey: "wand",  maxStack: 1 , weaponSpeed: 1.2 },
   bone_wand:      { id: "bone_wand",      name: "Bone Wand", type: "weapon", slot: "weapon", weaponKey: "wand",  maxStack: 1 , weaponSpeed: 1.2 },
@@ -1586,7 +1587,7 @@ wss.on("connection", (ws) => {
     hotbar: new Array(6).fill(null),
 
     // inventory (server authoritative)
-    inventory: { size: 24, slots: [ { id: "training_sword", qty: 1 },, ...Array(22).fill(null) ] },
+    inventory: { size: 24, slots: [ { id: "branch_sword", qty: 1 },, ...Array(22).fill(null) ] },
 
 // quests (server authoritative)
 quests: { jangoon_red_duke: { started: false, 

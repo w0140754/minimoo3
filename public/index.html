@@ -1489,8 +1489,12 @@ function getSpearSpriteForPlayer(p) {
 // Icons live under /assets/equipment/*, but the in-hand overlays live under /assets/*.
 const swordSprites = {
   training_sword: new Image(),
+  branch_sword: new Image(),
+
 };
 swordSprites.training_sword.src = "/assets/training_sword.png";
+swordSprites.branch_sword.src = "/assets/branch_sword.png";
+
 
 const wandSprites = {
   training_wand: new Image(),
@@ -1665,6 +1669,7 @@ mobSprites.snail_red.src  = "/assets/mobs/snail_red.png";
 ====================== */
 var equipIcons = {
   training_sword: new Image(),
+  branch_sword: new Image(),
   training_spear: new Image(),
   training_wand:  new Image(),
   bone_wand:      new Image(),
@@ -1685,8 +1690,8 @@ var equipIcons = {
 equipIcons.coin = new Image();
 equipIcons.coin.src = "/assets/items/gold_coin.png";
 
-
 equipIcons.training_sword.src = "/assets/equipment/training_sword.png";
+equipIcons.branch_sword.src = "/assets/equipment/branch_sword.png";
 equipIcons.training_spear.src = "/assets/equipment/training_spear.png";
 equipIcons.training_wand.src  = "/assets/equipment/training_wand.png";
 equipIcons.bone_wand.src      = "/assets/equipment/bone_wand.png";
@@ -6327,6 +6332,7 @@ const ITEM_INFO = {
 
 
   training_sword:  { name: "Training Sword",  desc: "A basic sword for practice." },
+  branch_sword:  { name: "Tree Branch",  desc: "Poke an eye out." },
   training_spear:  { name: "Hunting Spear",  desc: "A basic spear for practice." },
   candy_cane_spear:{ name: "North Pole",desc: "Festive… and pointy." },
   fang_spear:      { name: "Twin Fang",      desc: "A spear tipped with a wicked fang." },
@@ -6344,6 +6350,7 @@ const ITEM_INFO = {
 // Keep these in sync with server.js ITEMS where applicable.
 const ITEM_META = {
   training_sword:   { slot: "weapon", kind: "Sword", weaponSpeed: 1.75 },
+  branch_sword:   { slot: "weapon", kind: "Sword", weaponSpeed: 1.75 },
   training_wand:    { slot: "weapon", kind: "Wand",  weaponSpeed: 1.00 },
   training_spear:   { slot: "weapon", kind: "Spear", weaponSpeed: 1.50 },
   candy_cane_spear: { slot: "weapon", kind: "Spear", weaponSpeed: 1.75 },
