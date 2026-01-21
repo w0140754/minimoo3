@@ -348,31 +348,31 @@ const MOB_DEFS = {
   // Knockback tuning is per-mob so heavier mobs are harder to shove around.
   green: {
     radius: 28, maxHp: 50,  damage: 15, xp: 1, passiveUntilHit: true,
-    knockbackThreshold: 10, knockbackDist: 40,
+    knockbackThreshold: 10, knockbackDist: 30,
   },
   pink: {
-    radius: 28, maxHp: 80,  damage: 20, xp: 1, passiveUntilHit: true,
-    knockbackThreshold: 12, knockbackDist: 40,
+    radius: 28, maxHp: 80,  damage: 20, xp: 1, passiveUntilHit: false,
+    knockbackThreshold: 12, knockbackDist: 30,
   },
   orange: {
-    radius: 28, maxHp: 120, damage: 20, xp: 1, passiveUntilHit: true,
-    knockbackThreshold: 15, knockbackDist: 40,
+    radius: 28, maxHp: 120, damage: 20, xp: 1, passiveUntilHit: false,
+    knockbackThreshold: 15, knockbackDist: 30,
   },
   purple: {
-    radius: 28, maxHp: 150, damage: 25, xp: 1, passiveUntilHit: true,
-    knockbackThreshold: 18, knockbackDist: 40,
+    radius: 28, maxHp: 150, damage: 25, xp: 1, passiveUntilHit: false,
+    knockbackThreshold: 18, knockbackDist: 30,
   },
   rainbow: {
-    radius: 28, maxHp: 300, damage: 35, xp: 1, passiveUntilHit: true,
-    knockbackThreshold: 25, knockbackDist: 40,
+    radius: 28, maxHp: 300, damage: 35, xp: 1, passiveUntilHit: false,
+    knockbackThreshold: 25, knockbackDist: 30,
   },
   snail_blue: {
-    radius: 28, maxHp: 180, damage: 30, xp: 1, passiveUntilHit: true,
-    knockbackThreshold: 22, knockbackDist: 40,
+    radius: 28, maxHp: 180, damage: 30, xp: 1, passiveUntilHit: false,
+    knockbackThreshold: 22, knockbackDist: 30,
   },
   snail_red: {
     radius: 28, maxHp: 220, damage: 35, xp: 1, passiveUntilHit: true,
-    knockbackThreshold: 28, knockbackDist: 40,
+    knockbackThreshold: 28, knockbackDist: 30,
   },
 };
 
@@ -675,15 +675,36 @@ function findDropScatterPos(mapId, baseX, baseY, index = 0) {
 const MOB_DROP_TABLE = {
   // Orange slimes drop orange flan 25% of the time.
   orange: [
-    { itemId: "orange_flan", chance: 0.25, qty: 1 },
+	{ itemId: "orange_jelly", chance: 0.30, qty: 1 },
+	{ itemId: "training_sword",  chance: 0.03, qty: 1 },
+    { itemId: "training_spear",  chance: 0.03, qty: 1 },
+    { itemId: "training_wand",   chance: 0.03, qty: 1 },
   ],
+  pink: [
+	{ itemId: "pink_jelly", chance: 0.30, qty: 1 },
+	{ itemId: "charger_helmet", chance: 0.05, qty: 1 },
+	{ itemId: "charger_suit", chance: 0.05, qty: 1 },
+  ],
+   purple: [
+	{ itemId: "purple_jelly", chance: 0.30, qty: 1 },
+	{ itemId: "cloth_hat", chance: 0.05, qty: 1 },
+	{ itemId: "cloth_armor", chance: 0.05, qty: 1 },
+	{ itemId: "potion_purple", chance: 0.10, qty: 1 },
+  ],
+  rainbow: [
+	{ itemId: "rainbow_jelly", chance: 0.30, qty: 1 },
+	{ itemId: "bone_wand", chance: 0.10, qty: 1 },
+
+  ],
+
 
   // Green slimes drop green potions 10% of the time.
   green: [
-    { itemId: "potion_green",    chance: 0.3, qty: 1 },
-    { itemId: "training_sword",  chance: 0.1, qty: 1 },
-    { itemId: "training_spear",  chance: 0.1, qty: 1 },
-    { itemId: "training_wand",   chance: 0.1, qty: 1 },
+    { itemId: "green_jelly", chance: 0.30, qty: 1 },
+    { itemId: "potion_green",    chance: 0.1, qty: 1 },
+    { itemId: "training_sword",  chance: 0.03, qty: 1 },
+    { itemId: "training_spear",  chance: 0.03, qty: 1 },
+    { itemId: "training_wand",   chance: 0.03, qty: 1 },
   ],
 };
 
@@ -801,16 +822,22 @@ const WEAPONS = ["sword", "spear", "wand"];
 ====================== */
 const ITEMS = {
   // currency
-  coin: { id: "coin", name: "Coin", maxStack: 999 },
+  coin: { id: "coin", name: "Coin", maxStack: 9999 },
 
 
   // loot
   orange_flan: { id: "orange_flan", name: "Orange Flan", maxStack: 99 },
+  green_jelly: { id: "green_jelly", name: "Green Jelly", maxStack: 99 },
+  orange_jelly: { id: "orange_jelly", name: "Green Jelly", maxStack: 99 },
+  pink_jelly: { id: "pink_jelly", name: "Green Jelly", maxStack: 99 },
+  purple_jelly: { id: "purple_jelly", name: "Green Jelly", maxStack: 99 },
+  rainbow: { id: "rainbow_jelly", name: "Green Jelly", maxStack: 99 },
+
   // consumables
   potion_small: {
     id: "potion_small",
     name: "Small Potion",
-    maxStack: 20,
+    maxStack: 99,
     onUse(p) {
       p.hp = Math.min(p.maxHp, p.hp + 25);
     }
@@ -819,7 +846,7 @@ const ITEMS = {
   potion_green: {
   id: "potion_green",
   name: "Green Slime Tonic",
-  maxStack: 20,
+  maxStack: 99,
   onUse(player) {
     const HEAL = 50;
     player.hp = Math.min(player.maxHp, player.hp + HEAL);
@@ -829,7 +856,7 @@ const ITEMS = {
 potion_purple: {
   id: "potion_purple",
   name: "Purple Slime Tonic",
-  maxStack: 10,
+  maxStack: 99,
   onUse(player) {
     const HEAL = 300;
     player.hp = Math.min(player.maxHp, player.hp + HEAL);
@@ -2502,13 +2529,6 @@ if (msg.type === "editTile") {
         return;
       }
 
-      return;
-    }
-
-
-    if (msg.type === "swapWeapon") {
-      // Weapon cycling is deprecated in favor of equipment slots.
-      // Keep this as a no-op so older clients don’t break.
       return;
     }
 

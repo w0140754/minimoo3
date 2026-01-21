@@ -1068,7 +1068,7 @@ function sendEditTile(layer, tx, ty, tile) {
   wsSend({ type: "editTile", layer, x: tx, y: ty, tile });
 }
 
-function legacyCopyTextToClipboard(txt) {
+function fallbackCopyTextToClipboard(txt) {
   try {
     const ta = document.createElement("textarea");
     ta.value = txt;
@@ -1180,7 +1180,7 @@ function showExportOverlay(txt) {
           ok = true;
         }
       } catch {}
-      if (!ok) ok = legacyCopyTextToClipboard(t);
+      if (!ok) ok = fallbackCopyTextToClipboard(t);
       levelToastText = ok ? "Export copied to clipboard" : "Copy still blocked — use Ctrl+C";
       levelToastUntilMs = performance.now() + 2500;
       if (ok) overlay.style.display = "none";
@@ -1266,7 +1266,7 @@ try {
 }
 
 // Fallback for http / blocked clipboard contexts
-if (!copied) copied = legacyCopyTextToClipboard(payload);
+if (!copied) copied = fallbackCopyTextToClipboard(payload);
 
 if (copied) {
   levelToastText = "Exported makeMap() to clipboard (also logged to console)";
@@ -1684,6 +1684,13 @@ var equipIcons = {
   orange_flan: new Image(),
   potion_green: new Image(),
   potion_purple: new Image(),
+  green_jelly: new Image(),
+  orange_jelly: new Image(),
+  pink_jelly: new Image(),
+  purple_jelly: new Image(),
+  rainbow_jelly: new Image(),
+
+
 };
 
 // coin icon (used by drops list + inventory; safe if missing)
@@ -1706,6 +1713,12 @@ equipIcons.candy_cane_spear.src = "/assets/equipment/candy_cane_spear.png";
 equipIcons.fang_spear.src       = "/assets/equipment/fang_spear.png";
 equipIcons.potion_green.src  = "/assets/items/potion_green.png";
 equipIcons.potion_purple.src = "/assets/items/potion_purple.png";
+equipIcons.green_jelly.src = "/assets/items/green_jelly.png";
+equipIcons.orange_jelly.src = "/assets/items/orange_jelly.png";
+equipIcons.pink_jelly.src = "/assets/items/pink_jelly.png";
+equipIcons.purple_jelly.src = "/assets/items/purple_jelly.png";
+equipIcons.rainbow_jelly.src = "/assets/items/rainbow_jelly.png";
+
 
 
 function drawItemIcon(itemId, x, y, slotSize) {
@@ -7086,7 +7099,7 @@ const cloudEntities = [];
         ctx.imageSmoothingEnabled = false;
         ctx.drawImage(img, Math.round(drawX - NPC_DRAW_W/2), Math.round(drawY - NPC_DRAW_H/2), NPC_DRAW_W, NPC_DRAW_H);
       } else {
-        // Fallback: draw legacy npc sheet if image not loaded yet
+        // Fallback: draw default npc sheet if image not loaded yet
         drawSprite(npcSprite, drawX, drawY, st.dir, st.frame, NPC_FRAME_W, NPC_FRAME_H);
       }
       continue;
