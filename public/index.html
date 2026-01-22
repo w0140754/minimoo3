@@ -315,6 +315,76 @@ let inventoryOpen = false;
 let skillsOpen = false;
 
 // ======================
+// Movable HUD / Hotbar layout
+// ======================
+let hudPos = null;       // { x, y } top-left of HP/XP inner rect
+let hotbarPos = null;    // { x, y } top-left of hotbar slot 0
+
+let draggingHudBar = false;
+let hudDragOffsetX = 0;
+let hudDragOffsetY = 0;
+
+let draggingHotbarBar = false;
+let hotbarBarDragOffsetX = 0;
+let hotbarBarDragOffsetY = 0;
+
+const HUD_POS_STORAGE_KEY = "uiHudPos_v1";
+const HOTBAR_POS_STORAGE_KEY = "uiHotbarPos_v1";
+
+function loadUiLayout() {
+  try {
+    if (typeof window === "undefined" || typeof localStorage === "undefined") return;
+
+    const hRaw = localStorage.getItem(HUD_POS_STORAGE_KEY);
+    if (hRaw) {
+      try {
+        const obj = JSON.parse(hRaw);
+        if (obj && typeof obj.x === "number" && typeof obj.y === "number") {
+          hudPos = { x: obj.x, y: obj.y };
+        }
+      } catch (err) {
+        // ignore parse errors
+      }
+    }
+
+    const bRaw = localStorage.getItem(HOTBAR_POS_STORAGE_KEY);
+    if (bRaw) {
+      try {
+        const obj = JSON.parse(bRaw);
+        if (obj && typeof obj.x === "number" && typeof obj.y === "number") {
+          hotbarPos = { x: obj.x, y: obj.y };
+        }
+      } catch (err) {
+        // ignore parse errors
+      }
+    }
+  } catch (err) {
+    // localStorage might be unavailable; fail silently
+  }
+}
+
+function saveUiLayout() {
+  try {
+    if (typeof window === "undefined" || typeof localStorage === "undefined") return;
+
+    if (hudPos && typeof hudPos.x === "number" && typeof hudPos.y === "number") {
+      localStorage.setItem(HUD_POS_STORAGE_KEY, JSON.stringify(hudPos));
+    }
+    if (hotbarPos && typeof hotbarPos.x === "number" && typeof hotbarPos.y === "number") {
+      localStorage.setItem(HOTBAR_POS_STORAGE_KEY, JSON.stringify(hotbarPos));
+    }
+  } catch (err) {
+    // ignore
+  }
+}
+
+if (typeof window !== "undefined") {
+  window.addEventListener("load", () => {
+    loadUiLayout();
+  });
+}
+
+// ======================
 // HOTBAR (1–6)
 // - Press 1..6 to use a bound skill/item (initially: 1=Skill1, 2=Skill2)
 // - (Optional binding now) Ctrl+1..6 while hovering an inventory item binds that item
@@ -773,10 +843,11 @@ let pendingItemBind = null; // { itemId, preferSlot }
 function drawHotbar() {
   if (typeof ctx === "undefined" || typeof canvas === "undefined") return;
 
-  const box = 44, gap = 6;
-  const totalW = HOTBAR_SIZE * box + (HOTBAR_SIZE - 1) * gap;
-  const x0 = Math.round(canvas.width / 2 - totalW / 2);
-  const y0 = Math.round(canvas.height - box - 12);
+  const layout = getHotbarLayout();
+  const box = layout.box, gap = layout.gap;
+  const x0 = layout.x0;
+  const y0 = layout.y0;
+  const totalW = layout.totalW;
 
   const me = (typeof worldPlayers !== "undefined" && typeof myId !== "undefined")
     ? worldPlayers?.[myId]
@@ -3236,6 +3307,29 @@ canvas.addEventListener("mousemove", (e) => {
   lastAim.wy = wy;
   lastAim.has = true;
 
+  // If we're dragging the HUD or hotbar bar, update their positions (Ctrl-drag).
+  if (draggingHudBar && typeof canvas !== "undefined") {
+    const layout = getHudLayout();
+    const outerW = layout.w + 8;
+    const outerH = layout.hpH + layout.xpH + layout.padding * 2;
+    const rawX = mx - hudDragOffsetX;
+    const rawY = my - hudDragOffsetY;
+    const clampedX = clamp(rawX, 0, canvas.width - outerW);
+    const clampedY = clamp(rawY, 0, canvas.height - outerH);
+    hudPos = { x: clampedX + 4, y: clampedY + 4 };
+    return;
+  }
+
+  if (draggingHotbarBar && typeof canvas !== "undefined") {
+    const layout = getHotbarLayout();
+    const rawX = mx - hotbarBarDragOffsetX;
+    const rawY = my - hotbarBarDragOffsetY;
+    const clampedX = clamp(rawX, 0, canvas.width - layout.totalW);
+    const clampedY = clamp(rawY, 0, canvas.height - layout.box);
+    hotbarPos = { x: clampedX, y: clampedY };
+    return;
+  }
+
   // Hotbar drag start detection (only if mouse was pressed on a hotbar slot)
   if (hotbarPointerDownIndex != null && !draggingHotbar) {
     const dx = mx - hotbarPointerDownX;
@@ -3718,6 +3812,25 @@ window.addEventListener("keydown", (e) => {
 
 window.addEventListener("keyup", (e) => setMoveKey(e, false));
 
+// Prevent "stuck walking" if the window loses and regains focus while
+// movement keys are held (the browser may never send the keyup event).
+function clearMovementKeysAndSend() {
+  keys.up = false;
+  keys.down = false;
+  keys.left = false;
+  keys.right = false;
+  sendInput();
+}
+
+window.addEventListener("blur", () => {
+  clearMovementKeysAndSend();
+});
+
+window.addEventListener("focus", () => {
+  clearMovementKeysAndSend();
+});
+
+
 // Editor painting
 canvas.addEventListener("contextmenu", (e) => {
   if (!editorOpen) return;
@@ -4170,6 +4283,25 @@ canvas.addEventListener("mousedown", (e) => {
 
   const { mx, my, wx, wy } = getMouseWorldFromEvent(e);
 
+  // Ctrl+drag HUD / hotbar to reposition them.
+  if (e.ctrlKey) {
+    const hudRect = (typeof getHudHitRect === "function") ? getHudHitRect() : null;
+    if (hudRect && rectHit(hudRect, mx, my)) {
+      draggingHudBar = true;
+      hudDragOffsetX = mx - hudRect.x;
+      hudDragOffsetY = my - hudRect.y;
+      return;
+    }
+
+    const hotBounds = (typeof getHotbarBounds === "function") ? getHotbarBounds() : null;
+    if (hotBounds && rectHit(hotBounds, mx, my)) {
+      draggingHotbarBar = true;
+      hotbarBarDragOffsetX = mx - hotBounds.x;
+      hotbarBarDragOffsetY = my - hotBounds.y;
+      return;
+    }
+  }
+
   // Hotbar press: record potential drag and block attacks while over the bar.
   const hotHit = getHotbarSlotHit(mx, my);
   if (hotHit && hotbarSlots[hotHit.index]) {
@@ -4255,6 +4387,13 @@ window.addEventListener("mouseup", (e) => {
   invDragging = false;
   skillsDragging = false;
   bookDragging = false;
+
+  // Finish HUD / hotbar reposition drags (Ctrl-drag).
+  if (draggingHudBar || draggingHotbarBar) {
+    draggingHudBar = false;
+    draggingHotbarBar = false;
+    saveUiLayout();
+  }
 
   // Cancel any inventory drag if the mouse is released outside the canvas.
   if (draggingInv) {
@@ -5809,12 +5948,46 @@ function drawSkillHotbar() {
 }
 
 
-function getHotbarSlotHit(mx, my) {
-  if (typeof canvas === "undefined") return null;
+
+function getHotbarLayout() {
+  if (typeof canvas === "undefined") {
+    const box = 44, gap = 6;
+    const totalW = HOTBAR_SIZE * box + (HOTBAR_SIZE - 1) * gap;
+    return { x0: 0, y0: 0, box, gap, totalW };
+  }
+
   const box = 44, gap = 6;
   const totalW = HOTBAR_SIZE * box + (HOTBAR_SIZE - 1) * gap;
-  const x0 = Math.round(canvas.width / 2 - totalW / 2);
-  const y0 = Math.round(canvas.height - box - 12);
+
+  let x0, y0;
+  if (hotbarPos && typeof hotbarPos.x === "number" && typeof hotbarPos.y === "number") {
+    x0 = hotbarPos.x;
+    y0 = hotbarPos.y;
+  } else {
+    x0 = Math.round(canvas.width / 2 - totalW / 2);
+    y0 = Math.round(canvas.height - box - 12);
+  }
+  return { x0, y0, box, gap, totalW };
+}
+
+function getHotbarBounds() {
+  if (typeof canvas === "undefined") return null;
+  const layout = getHotbarLayout();
+  return {
+    x: layout.x0,
+    y: layout.y0,
+    w: layout.totalW,
+    h: layout.box,
+  };
+}
+
+function getHotbarSlotHit(mx, my) {
+  if (typeof canvas === "undefined") return null;
+  const layout = getHotbarLayout();
+  const box = layout.box, gap = layout.gap;
+  const x0 = layout.x0;
+  const y0 = layout.y0;
+  const totalW = layout.totalW;
 
   for (let i = 0; i < HOTBAR_SIZE; i++) {
     const x = x0 + i * (box + gap);
@@ -5886,22 +6059,51 @@ function drawDraggingIcon() {
   ctx.restore();
 }
 
-function drawHud() {
-  const { hp, maxHp, xp, xpNext } = getMyStats();
-  const hpPct = clamp(maxHp ? hp / maxHp : 0, 0, 1);
-  const xpPct = clamp(xpNext ? xp / xpNext : 0, 0, 1);
-
+function getHudLayout() {
   const w = 170;
   const hpH = 14;
   const xpH = 7;
   const padding = 4;
 
-  const x = canvas.width / 2 - w / 2;
-  const hotbarBoxH = 44; // must match drawHotbar()
-  const hotbarPadBottom = 12; // must match drawHotbar()
-  const hudClearance = hotbarBoxH + hotbarPadBottom + 10;
-  const y = Math.max(14, canvas.height - (hpH + xpH + padding * 3) - hudClearance);
-ctx.save();
+  if (typeof canvas === "undefined") {
+    return { x: 0, y: 0, w, hpH, xpH, padding };
+  }
+
+  let x, y;
+  if (hudPos && typeof hudPos.x === "number" && typeof hudPos.y === "number") {
+    x = hudPos.x;
+    y = hudPos.y;
+  } else {
+    // Default position: centered above the hotbar.
+    const hotbarBoxH = 44; // must match drawHotbar()
+    const hotbarPadBottom = 12; // must match drawHotbar()
+    const hudClearance = hotbarBoxH + hotbarPadBottom + 10;
+    x = canvas.width / 2 - w / 2;
+    y = Math.max(14, canvas.height - (hpH + xpH + padding * 3) - hudClearance);
+  }
+
+  return { x, y, w, hpH, xpH, padding };
+}
+
+function getHudHitRect() {
+  if (typeof canvas === "undefined") return null;
+  const { x, y, w, hpH, xpH, padding } = getHudLayout();
+  return {
+    x: Math.round(x - 4),
+    y: Math.round(y - 4),
+    w: Math.round(w + 8),
+    h: Math.round(hpH + xpH + padding * 2),
+  };
+}
+
+function drawHud() {
+  const { hp, maxHp, xp, xpNext } = getMyStats();
+  const hpPct = clamp(maxHp ? hp / maxHp : 0, 0, 1);
+  const xpPct = clamp(xpNext ? xp / xpNext : 0, 0, 1);
+
+  const { x, y, w, hpH, xpH, padding } = getHudLayout();
+
+  ctx.save();
   ctx.fillStyle = "rgba(0,0,0,0.55)";
   ctx.fillRect(x - 4, y - 4, w + 8, hpH + xpH + padding * 2);
 
@@ -5920,7 +6122,7 @@ ctx.save();
   ctx.fillText(`HP ${hp}/${maxHp}`, x + w / 2, y + hpH / 2);
 
   // XP BAR
-  const y2 = y + hpH ;
+  const y2 = y + hpH;
   ctx.fillStyle = "rgba(255,255,255,0.15)";
   ctx.fillRect(x, y2, w, xpH);
   ctx.fillStyle = "#4dabf7";
