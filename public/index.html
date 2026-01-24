@@ -305,8 +305,16 @@ const TILESET_COLS = 5; // tiles per row in tiles.png and tiles_objects.png
 // Convention: odd rows in tiles.png are passable; even rows are blocked.
 const WALL_TILE = TILESET_COLS; // row 2, col 1 (1-based) when cols=5
 
-const LOCAL_SWING_DUR = 0.18; // must match server p.atkAnim start value
-const ATTACK_DELAY_MS = 300; // local input throttle (server also enforces)
+const BASE_BASIC_SWING_DUR = 0.60; // must match server BASE_BASIC_SWING_SEC
+const FLAT_ATTACK_LOCKOUT_SEC = 0.10; // must match server FLAT_ATTACK_LOCKOUT_SEC
+function getWeaponSpeedById(itemId) {
+  const def = itemId ? ITEM_META[itemId] : null;
+  return Math.max(0.05, Number(def?.weaponSpeed) || 1);
+}
+function getSwingDurByWeaponId(itemId) {
+  const spd = getWeaponSpeedById(itemId);
+  return Math.max(0.05, BASE_BASIC_SWING_DUR / spd);
+}
 
 let nextAttackAtMs = 0; // local send throttle (server also enforces)
 
@@ -1516,14 +1524,19 @@ npcImages["npcs/npc_jangoon.png"].src = "/assets/npcs/npc_jangoon.png";
 // Attack weapon sprites (spears can swap art based on equipped spear item)
 const spearSprites = {
   training_spear: new Image(),
+  blue_umbrella_spear: new Image(),
   candy_cane_spear: new Image(),
   fang_spear: new Image(),
+
+  trident_spear:  new Image(),
 };
 spearSprites.training_spear.src = "/assets/basic_spear.png";
+spearSprites.blue_umbrella_spear.src = "/assets/blue_umbrella_spear.png";
 spearSprites.candy_cane_spear.src = "/assets/candy_cane_spear.png";
 spearSprites.fang_spear.src = "/assets/fang_spear.png";
 
 
+spearSprites.trident_spear.src = "/assets/trident_spear.png";
 // Projectile sprites (server sends pr.sprite key; fallback draws a simple bolt if missing)
 const projectileSprites = {
   wand_projectile: new Image(),
@@ -1562,11 +1575,14 @@ const swordSprites = {
   training_sword: new Image(),
   branch_sword: new Image(),
 
+
+  bone_sword: new Image(),
 };
 swordSprites.training_sword.src = "/assets/training_sword.png";
 swordSprites.branch_sword.src = "/assets/branch_sword.png";
 
 
+swordSprites.bone_sword.src = "/assets/bone_sword.png";
 const wandSprites = {
   training_wand: new Image(),
   bone_wand: new Image(),
@@ -1741,7 +1757,9 @@ mobSprites.snail_red.src  = "/assets/mobs/snail_red.png";
 var equipIcons = {
   training_sword: new Image(),
   branch_sword: new Image(),
+  bone_sword:    new Image(),
   training_spear: new Image(),
+  blue_umbrella_spear: new Image(),
   training_wand:  new Image(),
   bone_wand:      new Image(),
   cloth_armor:    new Image(),
@@ -1749,6 +1767,7 @@ var equipIcons = {
   lucky_charm:    new Image(),
   candy_cane_spear: new Image(),
   fang_spear:       new Image(),
+  trident_spear:    new Image(),
   charger_helmet: new Image(),
   red_duke:       new Image(),
   charger_suit: new Image(),
@@ -1770,7 +1789,10 @@ equipIcons.coin.src = "/assets/items/gold_coin.png";
 
 equipIcons.training_sword.src = "/assets/equipment/training_sword.png";
 equipIcons.branch_sword.src = "/assets/equipment/branch_sword.png";
+
+equipIcons.bone_sword.src = "/assets/equipment/bone_sword.png";
 equipIcons.training_spear.src = "/assets/equipment/training_spear.png";
+equipIcons.blue_umbrella_spear.src = "/assets/equipment/blue_umbrella_spear.png";
 equipIcons.training_wand.src  = "/assets/equipment/training_wand.png";
 equipIcons.bone_wand.src      = "/assets/equipment/bone_wand.png";
 equipIcons.cloth_armor.src    = "/assets/equipment/cloth_armor.png";
@@ -1782,6 +1804,8 @@ equipIcons.orange_flan.src = "/assets/items/orange_flan.png";
 equipIcons.lucky_charm.src    = "/assets/equipment/lucky_charm.png";
 equipIcons.candy_cane_spear.src = "/assets/equipment/candy_cane_spear.png";
 equipIcons.fang_spear.src       = "/assets/equipment/fang_spear.png";
+
+equipIcons.trident_spear.src = "/assets/equipment/trident_spear.png";
 equipIcons.potion_green.src  = "/assets/items/potion_green.png";
 equipIcons.potion_purple.src = "/assets/items/potion_purple.png";
 equipIcons.green_jelly.src = "/assets/items/green_jelly.png";
@@ -2850,6 +2874,18 @@ ws.onmessage = (e) => {
     return;
   }
 
+
+if (msg.type === "devSpawnResult") {
+  if (msg.ok) {
+    const id = msg.itemId || "item";
+    const qty = msg.qty || 1;
+    hotbarToast(`Spawned ${id} x${qty}`);
+  } else {
+    hotbarToast(`Spawn failed: ${msg.reason || "unknown error"}`);
+  }
+  return;
+}
+
   if (msg.type === "skill5State") {
     // Immediate feedback; actual state comes from snapshots.
     const on = !!msg.active;
@@ -3453,7 +3489,8 @@ function sendAttack() {
   // fallback: attack in current facing (server will use last facing)
   const nowMs = performance.now();
   if (nowMs < nextAttackAtMs) return;
-  nextAttackAtMs = nowMs + ATTACK_DELAY_MS;
+  const delayMs = Math.round((getSwingDurByWeaponId(wid) + FLAT_ATTACK_LOCKOUT_SEC) * 1000);
+  nextAttackAtMs = nowMs + delayMs;
   // Do not play local swing instantly; wait for server snapshot (p.atkAnim) so cooldown-rejected attacks don't animate.
   if (ws.readyState === 1) ws.send(JSON.stringify({ type: "attack" }));
 }
@@ -3683,6 +3720,28 @@ window.addEventListener("keydown", (e) => {
     }
     return;
   }
+
+
+// DEV: spawn an item into your inventory for testing
+// Usage: press F9 and enter `itemId` or `itemId:qty` (e.g. potion_small:5, gold:250, trident_spear)
+if (key === "F9") {
+  e.preventDefault();
+  if (e.repeat) return;
+  if (typeof ws === "undefined" || !ws || ws.readyState !== 1) {
+    hotbarToast("Not connected");
+    return;
+  }
+  const raw = prompt("DEV Spawn item into inventory:\n\nFormat: itemId or itemId:qty\nExamples: potion_small:5  gold:250  trident_spear");
+  if (!raw) return;
+  const s = String(raw).trim();
+  if (!s) return;
+  const parts = s.split(":");
+  const itemId = (parts[0] || "").trim();
+  const qty = (parts.length > 1) ? parseInt(parts[1], 10) : 1;
+  ws.send(JSON.stringify({ type: "devSpawnItem", itemId, qty }));
+  hotbarToast(`Spawn request: ${itemId}${Number.isFinite(qty) ? " x" + qty : ""}`);
+  return;
+}
 
   if (editorOpen) {
     // Don't let movement keys interfere while editing unless you want them.
@@ -5030,7 +5089,7 @@ function drawSpearThrust(x, y, dir, phase01, spearImg, playerId) {
   }
 
   const MAX_THRUST = 28;            // pixels pushed outward
-  const thrust = Math.round(prog * MAX_THRUST);
+  const thrust = prog * MAX_THRUST; // allow sub-pixel movement for smoother motion
 
   // Use the shared spear-hand anchor so the thrust lines up with the held spear.
   const hand = getSpearHand(dir);
@@ -6548,10 +6607,14 @@ const ITEM_INFO = {
 
   training_sword:  { name: "Training Sword",  desc: "A basic sword for practice." },
   branch_sword:  { name: "Tree Branch",  desc: "Poke an eye out." },
+  bone_sword:     { name: "Bone Club",      desc: "A heavy club carved from bone." },
   training_spear:  { name: "Hunting Spear",  desc: "A basic spear for practice." },
+  blue_umbrella_spear: { name: "Sky Blue Umbrella", desc: "A sky-blue umbrella repurposed into a spear." },
   candy_cane_spear:{ name: "North Pole",desc: "Festive… and pointy." },
   fang_spear:      { name: "Twin Fang",      desc: "A spear tipped with a wicked fang." },
+  trident_spear:  { name: "Trident",        desc: "A three-pronged spear that bites deep." },
   training_wand:   { name: "Training Wand",   desc: "A simple wand for new mages." },
+  bone_wand:       { name: "Bone Wand",       desc: "A wand carved from bone. Feels oddly warm." },
 
   cloth_armor:     { name: "Apprentice Robe",     desc: "Light protection." },
   charger_suit:    { name: "Charger Suit",    desc: "Sturdy armor with a metallic sheen." },
@@ -6564,18 +6627,22 @@ const ITEM_INFO = {
 // Minimal item meta for tooltip "splash" lines (type + weapon speed).
 // Keep these in sync with server.js ITEMS where applicable.
 const ITEM_META = {
-  training_sword:   { slot: "weapon", kind: "Sword", weaponSpeed: 1.75 },
-  branch_sword:   { slot: "weapon", kind: "Sword", weaponSpeed: 1.75 },
+  // Weapon speed is a multiplier; 1.00x means "normal".
+  training_sword:   { slot: "weapon", kind: "Sword", weaponSpeed: 1.00 },
+  branch_sword:     { slot: "weapon", kind: "Sword", weaponSpeed: 1.00 },
+  bone_sword:       { slot: "weapon", kind: "Sword", weaponSpeed: 1.00 },
   training_wand:    { slot: "weapon", kind: "Wand",  weaponSpeed: 1.00 },
-  training_spear:   { slot: "weapon", kind: "Spear", weaponSpeed: 1.50 },
-  candy_cane_spear: { slot: "weapon", kind: "Spear", weaponSpeed: 1.75 },
-  fang_spear:       { slot: "weapon", kind: "Spear", weaponSpeed: 1.50 },
-
+  bone_wand:        { slot: "weapon", kind: "Wand",  weaponSpeed: 1.00 },
+  training_spear:   { slot: "weapon", kind: "Spear", weaponSpeed: 1.00 },
+  blue_umbrella_spear:{ slot: "weapon", kind: "Spear", weaponSpeed: 1.00 },
+  candy_cane_spear: { slot: "weapon", kind: "Spear", weaponSpeed: 1.00 },
+  fang_spear:       { slot: "weapon", kind: "Spear", weaponSpeed: 1.00 },
+  trident_spear:    { slot: "weapon", kind: "Spear", weaponSpeed: 1.00 },
   cloth_armor:      { slot: "armor", kind: "Armor" },
   charger_suit:     { slot: "armor", kind: "Armor" },
   cloth_hat:        { slot: "hat",   kind: "Hat"   },
   charger_helmet:   { slot: "hat",   kind: "Hat"   },
-  lucky_charm:      { slot: "accessory", kind: "Accessory" },
+  lucky_charm:      { slot: "accessory", kind: "Accessory", speedBonus: 50 },
 };
 
 function getItemTooltipData(itemId, qty = 1, hover = null) {
@@ -6614,6 +6681,10 @@ function getItemTooltipData(itemId, qty = 1, hover = null) {
       metaLines.push("Type: Hat");
     } else if (meta.slot === "accessory") {
       metaLines.push("Type: Accessory");
+      if (typeof meta.speedBonus === "number") {
+        const sb = meta.speedBonus;
+        metaLines.push(`Speed: ${sb >= 0 ? "+" : ""}${sb}`);
+      }
     }
   }
 
@@ -7436,8 +7507,9 @@ const cloudEntities = [];
       const serverAnim = p2 ? (p2.atkAnim || 0) : 0;
       weaponActive = (serverAnim > 0) && hasEquippedWeapon && !!weapon;
       if (weaponActive) {
-        // serverAnim counts down from LOCAL_SWING_DUR
-        weaponPhase01 = clamp(1 - (serverAnim / LOCAL_SWING_DUR), 0, 1);
+        const swingDur = getSwingDurByWeaponId(p2?.equipment?.weapon);
+        // serverAnim counts down from swingDur
+        weaponPhase01 = clamp(1 - (serverAnim / swingDur), 0, 1);
 
         // Use an attack-locked direction while the weapon animation is active.
 renderDir = st.dir;

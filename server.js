@@ -36,6 +36,9 @@ const __dirname = path.dirname(url.fileURLToPath(import.meta.url));
 const ENABLE_MAP_EDITOR = true;
 const MAP_EDITOR_DEBUG_LOG = true; // set false to silence editor logs
 
+// DEV FLAG: set to false to disable the F9 "spawn item" testing feature
+const ENABLE_DEV_SPAWN = true;
+
 //SQL POSTGRES
 async function ensurePostgresSchema() {
   if (!pool) {
@@ -50,6 +53,7 @@ async function ensurePostgresSchema() {
       xp int not null default 0,
       xp_next int not null default 0,
       atk int not null default 10,
+	      speed int not null default 100,
       hp int not null default 100,
       max_hp int not null default 100,
       map_id text not null default 'C',
@@ -92,14 +96,15 @@ async function dbSavePlayer(p) {
   await pool.query(
     `
     insert into players
-      (name, level, xp, xp_next, atk, hp, max_hp, map_id, x, y, gold, equipment, inventory, quests, hotbar, monster_book, updated_at)
+      (name, level, xp, xp_next, atk, speed, hp, max_hp, map_id, x, y, gold, equipment, inventory, quests, hotbar, monster_book, updated_at)
     values
-      ($1,   $2,    $3, $4,     $5,  $6, $7,     $8,    $9, $10,$11, $12::jsonb, $13::jsonb, $14::jsonb, $15::jsonb, $16::jsonb, now())
+      ($1,   $2,    $3, $4,     $5,  $6,    $7, $8,     $9,    $10,$11,$12, $13::jsonb, $14::jsonb, $15::jsonb, $16::jsonb, $17::jsonb, now())
     on conflict (name) do update set
       level=excluded.level,
       xp=excluded.xp,
       xp_next=excluded.xp_next,
       atk=excluded.atk,
+      speed=excluded.speed,
       hp=excluded.hp,
       max_hp=excluded.max_hp,
       map_id=excluded.map_id,
@@ -112,13 +117,14 @@ async function dbSavePlayer(p) {
       hotbar=excluded.hotbar,
       monster_book=excluded.monster_book,
       updated_at=now()
-    `,
+`,
     [
       p.name,
       p.level ?? 1,
       p.xp ?? 0,
       p.xpNext ?? xpToNext(p.level ?? 1),
       p.atk ?? 10,
+            p.speed ?? 100,
       p.hp ?? 100,
       p.maxHp ?? 100,
       p.mapId ?? "C",
@@ -142,6 +148,7 @@ function applyRowToPlayer(p, row) {
   p.xp = row.xp ?? p.xp;
   p.xpNext = row.xp_next ?? p.xpNext;
   p.atk = row.atk ?? p.atk;
+  p.speed = row.speed ?? p.speed ?? 100;
   p.hp = row.hp ?? p.hp;
   p.maxHp = row.max_hp ?? p.maxHp;
 
@@ -180,6 +187,9 @@ function applyRowToPlayer(p, row) {
   const equippedWeaponId = p.equipment?.weapon || null;
   const def = equippedWeaponId ? ITEMS[equippedWeaponId] : null;
   p.weapon = def?.weaponKey || null;
+
+  // Recompute derived bonuses from equipment (e.g., Speed from accessories)
+  if (typeof recomputePlayerBonuses === "function") recomputePlayerBonuses(p);
 
   // Clamp in case map changed or coords are bad
   clampToWorldPlayer(p.mapId, p);
@@ -720,7 +730,7 @@ const MOB_CATALOG = (() => {
     const table = MOB_DROP_TABLE[mobType] || [];
     out[mobType] = {
       id: mobType,
-      name: titleCase(mobType),
+      name: (["green","pink","orange","purple","rainbow"].includes(mobType) ? `${titleCase(mobType)} Slime` : titleCase(mobType)),
       maxHp: def?.maxHp ?? 0,
       damage: def?.damage ?? 0,
       drops: [coinDrop, ...table.map(d => ({
@@ -865,11 +875,14 @@ potion_purple: {
 
   
   // equipment (MapleStory-style)
-  training_sword: { id: "training_sword", name: "Training Sword", type: "weapon", slot: "weapon", weaponKey: "sword", maxStack: 1 , weaponSpeed: 1.5 },
-  branch_sword: { id: "branch_sword", name: "Tree Branch", type: "weapon", slot: "weapon", weaponKey: "sword", maxStack: 1 , weaponSpeed: 1.5 },
-  training_spear: { id: "training_spear", name: "Training Spear", type: "weapon", slot: "weapon", weaponKey: "spear", maxStack: 1 , weaponSpeed: 1.5 },
-  candy_cane_spear: { id: "candy_cane_spear", name: "North Pole", type: "weapon", slot: "weapon", weaponKey: "spear", maxStack: 1 , weaponSpeed: 1.5 },
-  fang_spear:       { id: "fang_spear",       name: "Twin Fang",       type: "weapon", slot: "weapon", weaponKey: "spear", maxStack: 1 , weaponSpeed: 1.5 },
+  training_sword: { id: "training_sword", name: "Training Sword", type: "weapon", slot: "weapon", weaponKey: "sword", maxStack: 1 , weaponSpeed: 1.4 },
+  branch_sword: { id: "branch_sword", name: "Tree Branch", type: "weapon", slot: "weapon", weaponKey: "sword", maxStack: 1 , weaponSpeed: 1.4 },
+  bone_sword: { id: "bone_sword", name: "Bone Club", type: "weapon", slot: "weapon", weaponKey: "sword", maxStack: 1 , weaponSpeed: 1.4 },
+  training_spear: { id: "training_spear", name: "Training Spear", type: "weapon", slot: "weapon", weaponKey: "spear", maxStack: 1 , weaponSpeed: 1.2, knockbackMul: 1.5 },
+  blue_umbrella_spear: { id: "blue_umbrella_spear", name: "Sky Blue Umbrella", type: "weapon", slot: "weapon", weaponKey: "spear", maxStack: 1, weaponSpeed: 2, knockbackMul: 1.5 },
+  candy_cane_spear: { id: "candy_cane_spear", name: "North Pole", type: "weapon", slot: "weapon", weaponKey: "spear", maxStack: 1 , weaponSpeed: 1.2, knockbackMul: 1.5 },
+  fang_spear:       { id: "fang_spear",       name: "Twin Fang",       type: "weapon", slot: "weapon", weaponKey: "spear", maxStack: 1 , weaponSpeed: 1.2, knockbackMul: 1.5 },
+  trident_spear:    { id: "trident_spear",    name: "Trident",    type: "weapon", slot: "weapon", weaponKey: "spear", maxStack: 1 , weaponSpeed: 1.2, knockbackMul: 1.5 },
   training_wand:  { id: "training_wand",  name: "Training Wand",  type: "weapon", slot: "weapon", weaponKey: "wand",  maxStack: 1 , weaponSpeed: 1.2 },
   bone_wand:      { id: "bone_wand",      name: "Bone Wand", type: "weapon", slot: "weapon", weaponKey: "wand",  maxStack: 1 , weaponSpeed: 1.2 },
   cloth_armor:   { id: "cloth_armor",   name: "Apprentice Robe",   type: "armor",     slot: "armor",     maxStack: 1 },
@@ -877,7 +890,7 @@ potion_purple: {
   cloth_hat:     { id: "cloth_hat",     name: "Apprentice Hat",     type: "hat",       slot: "hat",       maxStack: 1 },
   charger_helmet: { id: "charger_helmet", name: "Charger Helmet", type: "hat", slot: "hat", maxStack: 1 },
   red_duke: { id: "red_duke", name: "Red Duke", type: "hat", slot: "hat", maxStack: 1 },
-  lucky_charm:   { id: "lucky_charm",   name: "Lucky Charm",   type: "accessory", slot: "accessory", maxStack: 1 }
+  lucky_charm:   { id: "lucky_charm",   name: "Lucky Charm",   type: "accessory", slot: "accessory", maxStack: 1, speedBonus: 20 }
 };
 
 // Prevent wasting healing potions when already at full HP.
@@ -956,9 +969,15 @@ function rollWeaponBonus(itemId) {
   switch (itemId) {
     case "training_sword":
     case "training_spear":
+    case "blue_umbrella_spear":
     case "training_wand":
       return randIntInclusive(0, 2);    // 0–2 bonus
-    case "bone_wand":
+    
+    case "bone_sword":
+      return randIntInclusive(1, 3);    // stronger than training sword
+    case "trident_spear":
+      return randIntInclusive(1, 4);    // stronger than training spear
+case "bone_wand":
       return randIntInclusive(1, 3);    // slightly stronger than training wand
     case "fang_spear":
       return randIntInclusive(1, 4);    // slightly better roll
@@ -976,6 +995,34 @@ function getPlayerAttack(p) {
   const total = base + bonus;
   return total > 0 ? total : 1;
 }
+
+// ===== Speed stat helpers =====
+// "Speed" is a stat with a baseline of 100. Movement speed scales linearly:
+//   effectiveMoveSpeed = BASE_MOVE_SPEED * (Speed / 100)
+function getPlayerSpeedStat(p) {
+  const base = Number.isFinite(p?.speed) ? p.speed : 100;
+  const bonus = Number.isFinite(p?.speedBonus) ? p.speedBonus : 0;
+  const total = base + bonus;
+  return total > 1 ? total : 1;
+}
+
+function recomputePlayerBonuses(p) {
+  if (!p) return;
+  let speedBonus = 0;
+
+  const eq = p.equipment || {};
+  for (const slotName of ["weapon", "armor", "hat", "accessory"]) {
+    const itemId = eq[slotName];
+    if (!itemId) continue;
+    const def = ITEMS[itemId];
+    if (!def) continue;
+
+    if (Number.isFinite(def.speedBonus)) speedBonus += def.speedBonus;
+  }
+
+  p.speedBonus = speedBonus;
+}
+
 
 
 function nextWeapon(w) {
@@ -1079,7 +1126,7 @@ function swordHitTestSkill4(p, m) {
 ====================== */
 const projectiles = new Map(); // id -> {id,mapId,ownerId,x,y,vx,vy,rad,damage,expiresAtMs}
 
-function spawnProjectile({ mapId, ownerId, x, y, vx, vy, rad = 10, damage = 8, lifeMs = 850, sprite = null, skill1 = false }) {
+function spawnProjectile({ mapId, ownerId, x, y, vx, vy, rad = 10, damage = 8, lifeMs = 850, sprite = null, skill1 = false, knockbackMul = 1 }) {
   const id = "pr_" + newId();
   projectiles.set(id, {
     id, mapId, ownerId,
@@ -1088,6 +1135,7 @@ function spawnProjectile({ mapId, ownerId, x, y, vx, vy, rad = 10, damage = 8, l
     damage,
     sprite: sprite || null,   // client uses this to pick an image
     skill1: !!skill1,         // if true: on mob-hit, trigger Skill 1 whirlpool
+    knockbackMul: (Number.isFinite(knockbackMul) && knockbackMul > 0) ? knockbackMul : 1,
     expiresAtMs: Date.now() + lifeMs
   });
   return id;
@@ -1207,6 +1255,9 @@ function spawnMob(id, mapId, opts = {}) {
     damage: opts.damage ?? (MOB_DEFS[mobType]?.damage ?? 10),
 	xp: opts.xp ?? (MOB_DEFS[mobType]?.xp ?? 12),
 
+    // Stats
+    speed: Number.isFinite(opts.speed) ? opts.speed : 100,
+
 
     dirX: 0, dirY: 0,
     changeDirIn: 0,
@@ -1296,10 +1347,25 @@ initStaticEntitiesFromTemplates();
 // Basic attack input lock (server-authoritative)
 // - Freezes movement briefly when a basic attack is accepted
 // - Locks facing direction to the attack direction for the same window
-const BASIC_ATK_LOCK_MS = 300;
-
+// NOTE: This should generally match the basic attack animation window (p.atkAnim)
+// so movement + facing remain locked for the full swing.
+const BASE_BASIC_SWING_SEC = 0.60;
+const FLAT_ATTACK_LOCKOUT_SEC = 0.20;// minimum extra delay after a swing finishes before another attack can be accepted
 // Shared basic-attack handler so we can trigger attacks both from explicit client clicks
 // and from server-side "hold-to-attack" repeat.
+// Knockback multiplier from the equipped weapon (lets some weapons shove harder).
+// Defaults: spears = 1.5x, everything else = 1.0x.
+function getPlayerWeaponKnockbackMul(p) {
+  const wid = p?.equipment?.weapon;
+  const def = wid ? ITEMS[wid] : null;
+  const raw = Number(def?.knockbackMul);
+  if (Number.isFinite(raw) && raw > 0) return raw;
+
+  const k = def?.weaponKey || null;
+  if (k === "spear") return 1.5;
+  return 1.0;
+}
+
 function attemptBasicAttack(ws, p, msg, nowMs = Date.now()) {
   if (!p) return false;
   if (p.hp <= 0 || p.respawnIn > 0) return false;
@@ -1321,19 +1387,22 @@ function attemptBasicAttack(ws, p, msg, nowMs = Date.now()) {
   if (weaponKey !== "wand" && p.skill1Primed) p.skill1Primed = false;
 
   // shared animation time (client uses this for sword/spear/wand “active”)
-  p.atkAnim = 0.18;
+  // (seconds)
+  const weaponSpeed = Math.max(0.05, Number(equippedDef?.weaponSpeed) || 1);
+  const swingSec = Math.max(0.05, (Number(BASE_BASIC_SWING_SEC) || 0.5) / weaponSpeed);
+  p.atkAnim = swingSec;
   // Default attack kind is a normal/basic swing (no special visuals)
   p.atkKind = null;
 
   // weapon cooldowns (anti-spam)
   // NOTE: This is the *authoritative* lockout.
-  const baseDelaySec = 1.0; // all weapons are balanced around 1 basic attack per second
-  const weaponSpeed = Number(equippedDef?.weaponSpeed) || 1;
-  const finalDelaySec = baseDelaySec / Math.max(0.05, weaponSpeed);
-  p.atkCd = finalDelaySec;
+  // swingSec already computed above from BASE_BASIC_SWING_SEC / weaponSpeed
+  // Cooldown is tied to the weapon swing animation so the player can re-attack
+  // as soon as the animation finishes (and after any lock window).
+  p.atkCd = swingSec + FLAT_ATTACK_LOCKOUT_SEC;
 
   // Freeze + facing lock window
-  p.basicAtkLockUntilMs = nowMs + BASIC_ATK_LOCK_MS;
+  p.basicAtkLockUntilMs = nowMs + Math.round(swingSec * 1000);
 
   // Optional aim from client.
   // We prefer aimDirX/aimDirY when provided because they are derived from the player's
@@ -1415,9 +1484,8 @@ function attemptBasicAttack(ws, p, msg, nowMs = Date.now()) {
       m.lastHitBy = p.id;
 
       // Big knockback if this single hit is strong enough.
-      maybeBigKnockback(m, p.x, p.y, dmg);
-
-      // Basic attacks should provoke aggro.
+      maybeBigKnockback(m, p.x, p.y, dmg, getPlayerWeaponKnockbackMul(p));
+// Basic attacks should provoke aggro.
       setMobAggro(m, p.id);
 
       broadcastToMap(p.mapId, {
@@ -1466,9 +1534,8 @@ function attemptBasicAttack(ws, p, msg, nowMs = Date.now()) {
       m.lastHitBy = p.id;
 
       // Big knockback if this single hit is strong enough.
-      maybeBigKnockback(m, p.x, p.y, dmg);
-
-      // Basic attacks should provoke aggro.
+      maybeBigKnockback(m, p.x, p.y, dmg, getPlayerWeaponKnockbackMul(p));
+// Basic attacks should provoke aggro.
       setMobAggro(m, p.id);
 
       broadcastToMap(p.mapId, {
@@ -1533,7 +1600,8 @@ function attemptBasicAttack(ws, p, msg, nowMs = Date.now()) {
       damage: Math.max(1, Math.floor(baseAtk * 0.75)),
       lifeMs,
       sprite: wantsSkill1 ? "skill1_projectile" : "wand_projectile",
-      skill1: wantsSkill1
+      skill1: wantsSkill1,
+      knockbackMul: getPlayerWeaponKnockbackMul(p)
     });
 
     return true;
@@ -1598,6 +1666,8 @@ wss.on("connection", (ws) => {
     xpNext: xpToNext(1),
     atk: 10,
     weaponBonus: 0,
+    speed: 100,
+    speedBonus: 0,
     // Basic attack can hit this many mobs (mastery can raise this)
     basicHitCap: 1,
     hp: 100,
@@ -1614,7 +1684,7 @@ wss.on("connection", (ws) => {
     hotbar: new Array(6).fill(null),
 
     // inventory (server authoritative)
-    inventory: { size: 24, slots: [ { id: "branch_sword", qty: 1 },, ...Array(22).fill(null) ] },
+    inventory: { size: 24, slots: [ { id: "branch_sword", qty: 1 },{ id: "lucky_charm", qty: 1 },{ id: "bone_sword", qty: 1 },{ id: "trident_spear", qty: 1 }, ...Array(19).fill(null) ] },
 
 // quests (server authoritative)
 quests: { jangoon_red_duke: { started: false, 
@@ -1759,6 +1829,33 @@ ws.on("message", async (buf) => {
       return;
     }
 
+
+// DEV: spawn an item directly into your inventory (testing convenience)
+// Client hotkey: F9 (see index.html)
+if (msg.type === "devSpawnItem") {
+  if (!ENABLE_DEV_SPAWN) return;
+
+  const itemId = (msg.itemId ?? "").toString();
+  if (!itemId || !ITEMS[itemId]) {
+    send(ws, { type: "devSpawnResult", ok: false, reason: "Unknown itemId" });
+    return;
+  }
+
+  let qty = parseInt(msg.qty, 10);
+  if (!Number.isFinite(qty) || qty <= 0) qty = 1;
+  qty = Math.min(999, qty);
+
+  // Optional: force a specific weapon roll (for testing)
+  const weaponBonus = Number.isFinite(msg.weaponBonus) ? msg.weaponBonus : null;
+  const ok = addItemToInventory(p, itemId, qty, weaponBonus);
+  if (!ok) {
+    send(ws, { type: "devSpawnResult", ok: false, reason: "Inventory full" });
+    return;
+  }
+
+  send(ws, { type: "devSpawnResult", ok: true, itemId, qty });
+  return;
+}
 
 
     if (msg.type === "input") {
@@ -1995,9 +2092,8 @@ if (msg.type === "skill2DoubleStab") {
         m.lastHitBy = p.id;
 
         // Big knockback if this single hit is strong enough.
-        maybeBigKnockback(m, p.x, p.y, dmg);
-
-        // Aggro mobs on hit (server-wide aggro system)
+        maybeBigKnockback(m, p.x, p.y, dmg, getPlayerWeaponKnockbackMul(p));
+// Aggro mobs on hit (server-wide aggro system)
         setMobAggro(m, p.id);
 
         // Combat text / hit FX (match regular attacks: client listens for type:"hit")
@@ -2131,9 +2227,8 @@ if (msg.type === "skill3DashSlash") {
         m.lastHitBy = p.id;
 
         // Big knockback if this single hit is strong enough.
-        maybeBigKnockback(m, p.x, p.y, dashDmg);
-
-        setMobAggro(m, p.id);
+        maybeBigKnockback(m, p.x, p.y, dashDmg, getPlayerWeaponKnockbackMul(p));
+setMobAggro(m, p.id);
 
         broadcastToMap(p.mapId, {
           type: "hit",
@@ -2289,8 +2384,8 @@ if (msg.type === "skill4WideSlash") {
     m.hp -= dmg;
     m.lastHitBy = p.id;
 
-    maybeBigKnockback(m, p.x, p.y, dmg);
-    setMobAggro(m, p.id);
+    maybeBigKnockback(m, p.x, p.y, dmg, getPlayerWeaponKnockbackMul(p));
+setMobAggro(m, p.id);
 
     broadcastToMap(p.mapId, {
       type: "hit",
@@ -2369,6 +2464,8 @@ if (msg.type === "skill4WideSlash") {
           p.weapon = def.weaponKey || "sword";
           p.weaponBonus = newWeaponBonus;
         }
+        // Apply derived stat bonuses from equipment changes
+        recomputePlayerBonuses(p);
         return;
       }
 
@@ -2445,6 +2542,9 @@ if (msg.type === "skill4WideSlash") {
       if (slotName === "weapon") {
         p.weapon = "sword"; // default unarmed behavior uses sword logic for now
       }
+
+      // Apply derived stat bonuses from equipment changes
+      recomputePlayerBonuses(p);
       return;
     }
 
@@ -2820,7 +2920,7 @@ function knockbackMobFrom(m, srcX, srcY, dist) {
   moveMobWithSlide(m, dx * dist, dy * dist, moveRadius);
 }
 
-function maybeBigKnockback(m, srcX, srcY, dmg) {
+function maybeBigKnockback(m, srcX, srcY, dmg, kbMul = 1) {
   if (!m) return;
   if (!Number.isFinite(dmg)) return;
 
@@ -2838,7 +2938,8 @@ function maybeBigKnockback(m, srcX, srcY, dmg) {
     BIG_KNOCKBACK_DIST;
 
   if (dmg < threshold) return;
-  knockbackMobFrom(m, srcX, srcY, dist);
+  const mul = (Number.isFinite(kbMul) && kbMul > 0) ? kbMul : 1;
+  knockbackMobFrom(m, srcX, srcY, dist * mul);
 }
 
 
@@ -2912,7 +3013,7 @@ function tickStep(dt) {
 
 
     // Players movement + timers + save + drop pickup + respawn
-    const PLAYER_SPEED = 180;
+    const BASE_PLAYER_MOVE_SPEED = 125;
     for (const p of players.values()) {
       p.atkAnim = Math.max(0, p.atkAnim - dt);
       p.atkCd = Math.max(0, p.atkCd - dt);
@@ -2984,8 +3085,11 @@ function tickStep(dt) {
       const len = Math.hypot(dx, dy);
       if (len > 0) { dx /= len; dy /= len; }
 
-      const nx = p.x + dx * PLAYER_SPEED * dt;
-      const ny = p.y + dy * PLAYER_SPEED * dt;
+      const speedStat = (typeof getPlayerSpeedStat === "function") ? getPlayerSpeedStat(p) : (Number.isFinite(p.speed) ? p.speed : 100);
+      const moveSpeed = BASE_PLAYER_MOVE_SPEED * (speedStat / 100);
+
+      const nx = p.x + dx * moveSpeed * dt;
+      const ny = p.y + dy * moveSpeed * dt;
 
       if (!collidesPlayer(p.mapId, nx, p.y)) p.x = nx;
       if (!collidesPlayer(p.mapId, p.x, ny)) p.y = ny;
@@ -3025,8 +3129,8 @@ function tickStep(dt) {
 
           // Big knockback if this single hit is strong enough (normal wand bolts only).
           if (hitDmg > 0) {
-            maybeBigKnockback(m, pr.x, pr.y, hitDmg);
-          }
+            maybeBigKnockback(m, pr.x, pr.y, hitDmg, pr.knockbackMul);
+}
 
           // Skill 1 should NOT provoke/aggro mobs. Normal hits still do.
           if (!isSkill1Shot) setMobAggro(m, pr.ownerId);
@@ -3224,7 +3328,7 @@ function tickStep(dt) {
     }
 
     // Mobs: wander + melee attack + respawn
-    const BASE_MOB_SPEED = 120;
+    const BASE_MOB_SPEED = 125;
     // use per-mob baseAggroRange / hitAggroRange instead of a single constant
     const MOB_HIT = 36;
     // MOB damage is per-type (see MOB_DEFS). Fallback below if missing.
@@ -3326,8 +3430,8 @@ function tickStep(dt) {
         dirY = m.dirY;
       }
 
-
-  const speed = BASE_MOB_SPEED * (m.speedMul ?? 0.65) * (provoked ? (m.aggroSpeedMul ?? 1.0) : 1.0);
+      const speedStat = Number.isFinite(m.speed) ? m.speed : 100;
+      const speed = BASE_MOB_SPEED * (speedStat / 100) * (m.speedMul ?? 0.65) * (provoked ? (m.aggroSpeedMul ?? 1.0) : 1.0);
 
   // While chasing, if we get stuck on corners, add a short "wall-hug" nudge.
   // This is cheap, feels good, and avoids full pathfinding.
@@ -3474,6 +3578,9 @@ setInterval(() => {
         hp: p.hp, maxHp: p.maxHp,
         level: p.level, xp: p.xp, xpNext: p.xpNext,
         atk: totalAtk,
+        speed: (typeof getPlayerSpeedStat === "function") ? getPlayerSpeedStat(p) : (Number.isFinite(p.speed) ? p.speed : 100),
+        baseSpeed: Number.isFinite(p.speed) ? p.speed : 100,
+        speedBonus: Number.isFinite(p.speedBonus) ? p.speedBonus : 0,
         baseAtk: Number.isFinite(p.atk) ? p.atk : 0,
         weaponBonus: Number.isFinite(p.weaponBonus) ? p.weaponBonus : 0,
         atkAnim: p.atkAnim,
@@ -3512,6 +3619,7 @@ setInterval(() => {
         x: mob.x, y: mob.y,
         hp: mob.hp, maxHp: mob.maxHp,
         mobType: mob.mobType,
+        speed: Number.isFinite(mob.speed) ? mob.speed : 100,
         radius: mob.radius ?? MOB_RADIUS,
         // Client uses this to keep HP bars visible while a mob is actively aggro/provoked
         // (e.g., kiting a mob outside the normal HP-bar distance).
