@@ -73,9 +73,11 @@ async function ensurePostgresSchema() {
   await pool.query(`alter table players add column if not exists hotbar jsonb not null default '[]'::jsonb;`);
 
   // Migration: add speed stat column if table already existed (older deployments)
-  await pool.query(`alter table players add column if not exists speed int not null default 100;
-  await pool.query(`alter table players add column if not exists xp_next int not null default 0;`);`);
+  await pool.query(`alter table players add column if not exists speed int not null default 100;`);
 
+
+  // Migration: add xp_next if table already existed (older deployments)
+  await pool.query(`alter table players add column if not exists xp_next int not null default 0;`);
 await pool.query(`create index if not exists players_updated_at_idx on players(updated_at);`);
 
   // Migration: add monster_book if table already existed
