@@ -1362,6 +1362,17 @@ if (copied) {
 
 let invUI = null; // cached inventory UI layout for click handling
 
+// Inventory tabs (3 bags, each 24 slots shown at a time)
+const INV_TAB_SIZE = 24; // must match server (6x4 grid)
+const INV_TAB_COUNT = 3;
+const INV_TOTAL_SLOTS = INV_TAB_SIZE * INV_TAB_COUNT;
+const INV_TABS = [
+  { key: "equipment", label: "Equipment" },
+  { key: "consumable", label: "Consumables" },
+  { key: "other", label: "Other" },
+];
+let invActiveTab = 0; // 0=equipment, 1=consumables, 2=other
+
 let dropConfirm = null; // { slotIndex, itemId }
 
 // Inventory window (draggable)
@@ -4037,6 +4048,22 @@ canvas.addEventListener("mousedown", (e) => {
     return;
   }
 
+  // inventory tabs
+  if (invUI.tabs) {
+    const tabOrder = ["equipment", "consumable", "other"];
+    for (let ti = 0; ti < tabOrder.length; ti++) {
+      const r = invUI.tabs[tabOrder[ti]];
+      if (r && mx >= r.x && mx <= r.x + r.w && my >= r.y && my <= r.y + r.h) {
+        invActiveTab = ti;
+        // closing menus feels better when switching pages
+        invItemMenu = null;
+        invItemMenuUI = null;
+        dropConfirm = null;
+        return;
+      }
+    }
+  }
+
   // equipment slots
   for (const [slotName, r] of Object.entries(invUI.equipSlots)) {
     if (mx >= r.x && mx <= r.x + r.w && my >= r.y && my <= r.y + r.h) {
@@ -4055,7 +4082,8 @@ canvas.addEventListener("mousedown", (e) => {
   const sy = Math.floor((my - g.y) / g.slotSize);
   if (sx < 0 || sy < 0 || sx >= g.cols || sy >= g.rows) return;
 
-  const slotIndex = sy * g.cols + sx;
+  const relIndex = sy * g.cols + sx;
+  const slotIndex = (Number.isFinite(g.offset) ? g.offset : 0) + relIndex;
 
   const me = (typeof worldPlayers !== "undefined" && typeof myId !== "undefined") ? worldPlayers?.[myId] : null;
   const slots = me?.inventory?.slots || [];
@@ -4147,7 +4175,7 @@ canvas.addEventListener("mouseup", (e) => {
       const sx = Math.floor((mx - g.x) / g.slotSize);
       const sy = Math.floor((my - g.y) / g.slotSize);
       if (sx >= 0 && sy >= 0 && sx < g.cols && sy < g.rows) {
-        toSlot = sy * g.cols + sx;
+        toSlot = (Number.isFinite(g.offset) ? g.offset : 0) + (sy * g.cols + sx);
       }
     }
 
@@ -4188,8 +4216,9 @@ canvas.addEventListener("mouseup", (e) => {
 
   // If this is a consumable, open the submenu instead of immediately using it.
   if (isConsumableItemId(slot.id)) {
-    const sx = slotIndex % g.cols;
-    const sy = Math.floor(slotIndex / g.cols);
+    const relIndex = slotIndex - (Number.isFinite(g.offset) ? g.offset : 0);
+    const sx = relIndex % g.cols;
+    const sy = Math.floor(relIndex / g.cols);
     const slotX = g.x + sx * g.slotSize;
     const slotY = g.y + sy * g.slotSize;
 
@@ -4974,10 +5003,27 @@ function drawSwordSlash(x, y, dir, phase01, swordImg, atkKind = null) {
   // Angles are in radians, measured from +X axis.
   // We sweep a wide arc (about 120°) to feel distinct from spear thrust.
   const sweep = (Math.PI * 2) / 3; // 120°
-  const u = (t < 0.55) ? easeOutCubic(t / 0.55) : (0.85 + 0.15 * easeInOut((t - 0.55) / 0.45));
-  // u goes 0..~1, with a slight linger near the end.
 
-  // Base angles (start -> end) per facing direction
+  // Timing/feel tweak:
+  // - Spend MORE of the animation budget on the main swing (slower, smoother arc)
+  // - Spend LESS on the end "bounce"/settle (snappier finish)
+  const SWING_T = 0.75;   // portion of time used for the main swing
+  const SWING_U = 0.92;   // portion of arc completed by the end of the swing
+
+  let u;
+  if (t < SWING_T) {
+    // Main swing: ease-in-out so it doesn't snap instantly.
+    u = easeInOut(t / SWING_T) * SWING_U;
+  } else {
+    // Quick settle: finish the last bit fast + a tiny overshoot that returns by the end.
+    const v = clamp((t - SWING_T) / (1 - SWING_T), 0, 1);
+    const base = SWING_U + (1 - SWING_U) * easeOutCubic(v);
+    const bounce = 0.05 * Math.sin(Math.PI * v) * (1 - v); // small, fast "bounce"
+    u = base + bounce;
+  }
+
+  // u goes 0..~1 with a brief overshoot during the settle phase.
+// Base angles (start -> end) per facing direction
   let a0 = 0, a1 = 0;
   if (dir === DIR.RIGHT) { a0 = -Math.PI/3; a1 = a0 + sweep; }
   else if (dir === DIR.LEFT) { a0 = Math.PI + Math.PI/3; a1 = a0 - sweep; }
@@ -4986,7 +5032,7 @@ function drawSwordSlash(x, y, dir, phase01, swordImg, atkKind = null) {
     a0 = -Math.PI/2 + Math.PI/3; a1 = a0 - sweep;
   }
 
-  const ang = a0 + (a1 - a0) * clamp(u, 0, 1);
+  const ang = a0 + (a1 - a0) * clamp(u, 0, 1.06); // allow tiny overshoot for the bounce
 
   // Base geometry for the blade + arc so Skill 4 can scale it up cleanly
   const baseReach = 18;
@@ -5091,6 +5137,13 @@ function drawSpearThrust(x, y, dir, phase01, spearImg, playerId) {
   const MAX_THRUST = 28;            // pixels pushed outward
   const thrust = prog * MAX_THRUST; // allow sub-pixel movement for smoother motion
 
+  // Side-thrust curve: dip down mid-thrust, return to center.
+  // Only applies when facing LEFT/RIGHT (screen-down is positive Y).
+  const dipPx = 3; // tweak: 0..8
+  const curveY = (dir === DIR.LEFT || dir === DIR.RIGHT)
+    ? (dipPx * Math.sin(Math.PI * prog))
+    : 0;
+
   // Use the shared spear-hand anchor so the thrust lines up with the held spear.
   const hand = getSpearHand(dir);
 
@@ -5113,8 +5166,8 @@ function drawSpearThrust(x, y, dir, phase01, spearImg, playerId) {
 
   // Move outward along the facing direction (in world space).
   // We apply thrust before rotation by translating in direction coords.
-  if (dir === DIR.RIGHT) ctx.translate(thrust, 0);
-  if (dir === DIR.LEFT)  ctx.translate(-thrust, 0);
+  if (dir === DIR.RIGHT) ctx.translate(thrust, curveY);
+  if (dir === DIR.LEFT)  ctx.translate(-thrust, curveY);
   if (dir === DIR.DOWN)  ctx.translate(0, thrust);
   if (dir === DIR.UP)    ctx.translate(0, -thrust);
 
@@ -5142,11 +5195,18 @@ function drawSpearThrust(x, y, dir, phase01, spearImg, playerId) {
     if (tAbs > SKILL2_VIS_MS + 200) skill2FxByCaster.delete(sid);
   }
 
+  // Visual "reach": stretch spear length during thrust (LEFT/RIGHT only) without pushing the grip away.
+  let lenScale = 1;
+  if (dir === DIR.LEFT || dir === DIR.RIGHT) {
+    const STRETCH_MAX = 0.25; // tweak: 0.20..0.50
+    lenScale = 1 + STRETCH_MAX * prog;
+  }
+
   ctx.rotate(extraAng);
-  if (extraScale !== 1) ctx.scale(extraScale, extraScale);
+  if (extraScale !== 1 || lenScale !== 1) ctx.scale(extraScale, extraScale * lenScale);
   if (extraSide !== 0) ctx.translate(extraSide, 0);
 
-  // IMPORTANT: no spear scaling.
+  // NOTE: We avoid uniform spear scaling; only a length-stretch (Y) for LEFT/RIGHT thrust feel.
   // We draw at the sprite's native resolution (or a 32x64 fallback) so the spear art controls its own size.
   if (ready) {
     const w = img.naturalWidth || 32;
@@ -6343,6 +6403,7 @@ function drawEditorOverlay() {
 /* ======================
    INVENTORY UI (MapleStory-style)
 ====================== */
+
 function drawInventory(inv, equipment) {
   const cols = 6;
   const rows = 4;
@@ -6353,15 +6414,10 @@ function drawInventory(inv, equipment) {
 
   const panelW = cols * slotSize + PAD * 2;
 
-  // Equipment row layout
-  // (we compute panelH from where the grid ends so nothing gets cut off)
-
-  // Equipment row layout
-  // position (draggable)
   // If this is the first draw after opening, center it.
   if (invWinX == null || invWinY == null) {
     invWinX = Math.floor(canvas.width / 2 - panelW / 2);
-    invWinY = Math.floor(canvas.height / 2 - 220);
+    invWinY = Math.floor(canvas.height / 2 - 230);
   }
 
   let startX = invWinX;
@@ -6378,9 +6434,24 @@ function drawInventory(inv, equipment) {
     accessory: { x: eqX + 3 * (slotSize + eqGap), y: eqY, w: slotSize, h: slotSize },
   };
 
-  // Inventory grid layout
+  // ---- Tabs (3x inventory pages) ----
+  const TAB_H = 20;
+  const TAB_GAP = 6;
+  const tabsY = eqY + slotSize + 12;
+  const tabsX = startX + PAD;
+  const tabsW = panelW - PAD * 2;
+  const tabW = Math.floor((tabsW - TAB_GAP * 2) / 3);
+
+  const tabRects = {
+    equipment:  { x: tabsX + 0 * (tabW + TAB_GAP), y: tabsY, w: tabW, h: TAB_H },
+    consumable: { x: tabsX + 1 * (tabW + TAB_GAP), y: tabsY, w: tabW, h: TAB_H },
+    other:      { x: tabsX + 2 * (tabW + TAB_GAP), y: tabsY, w: tabW, h: TAB_H },
+  };
+
+  // Inventory grid layout (shows one tab/page at a time)
+  const gridLabelY = tabsY + TAB_H + 4;
   const gridX = startX + PAD;
-  const gridY = eqY + slotSize + 38;
+  const gridY = gridLabelY + 18;
 
   const panelH = (gridY + rows * slotSize + PAD) - startY;
 
@@ -6409,9 +6480,12 @@ function drawInventory(inv, equipment) {
     h: HEADER_H
   };
 
+  const tabOffset = (Math.max(0, Math.min(INV_TAB_COUNT - 1, invActiveTab)) * INV_TAB_SIZE);
+
   // Cache layout for click handling
   invUI = {
     equipSlots,
+    tabs: tabRects,
     grid: {
       x: gridX,
       y: gridY,
@@ -6419,7 +6493,8 @@ function drawInventory(inv, equipment) {
       rows,
       slotSize,
       w: cols * slotSize,
-      h: rows * slotSize
+      h: rows * slotSize,
+      offset: tabOffset
     }
   };
 
@@ -6467,7 +6542,6 @@ function drawInventory(inv, equipment) {
 
     const itemId = eq[slotName];
     if (itemId) {
-      // icon first, fallback to text if unknown
       const drew = drawItemIcon(itemId, r.x, r.y, r.w);
       if (!drew) {
         ctx.fillStyle = "#fff";
@@ -6476,10 +6550,39 @@ function drawInventory(inv, equipment) {
     }
   }
 
-  ctx.fillStyle = "#ddd";
-  ctx.fillText("Items", startX + PAD, gridY - 18);
+  // ---- Tabs UI ----
+  ctx.save();
+  ctx.font = "12px system-ui";
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
 
-  // Draw inventory grid
+  const tabKeys = ["equipment", "consumable", "other"];
+  const tabLabels = ["Equip", "Use", "Other"];
+
+  for (let ti = 0; ti < 3; ti++) {
+    const key = tabKeys[ti];
+    const r = tabRects[key];
+    const active = (invActiveTab === ti);
+
+    ctx.fillStyle = active ? "rgba(255,255,255,0.10)" : "rgba(255,255,255,0.05)";
+    ctx.fillRect(r.x, r.y, r.w, r.h);
+
+    ctx.strokeStyle = active ? "rgba(255,255,255,0.34)" : "rgba(255,255,255,0.18)";
+    ctx.strokeRect(r.x + 0.5, r.y + 0.5, r.w - 1, r.h - 1);
+
+    ctx.fillStyle = active ? "#fff" : "rgba(255,255,255,0.75)";
+    ctx.fillText(tabLabels[ti], r.x + r.w / 2, r.y + r.h / 2 + 0.5);
+  }
+  ctx.restore();
+
+  const activeLabel = INV_TABS?.[invActiveTab]?.label || "Items";
+  ctx.fillStyle = "#ddd";
+  ctx.font = "12px system-ui";
+  ctx.textAlign = "left";
+  ctx.textBaseline = "top";
+  ctx.fillText(`Items (${activeLabel})`, startX + PAD, gridLabelY);
+
+  // Draw inventory grid (one page at a time)
   const slots = inv?.slots || [];
   for (let i = 0; i < cols * rows; i++) {
     const x = gridX + (i % cols) * slotSize;
@@ -6488,10 +6591,11 @@ function drawInventory(inv, equipment) {
     ctx.strokeStyle = "#888";
     ctx.strokeRect(x, y, slotSize, slotSize);
 
-    const slot = slots[i];
-    const isDraggingThisSlot = draggingInv && draggingInv.fromSlot === i;
+    const absIndex = tabOffset + i;
+    const slot = slots[absIndex];
+    const isDraggingThisSlot = draggingInv && draggingInv.fromSlot === absIndex;
+
     if (slot && !isDraggingThisSlot) {
-      // icon first, fallback to text if unknown
       const drew = drawItemIcon(slot.id, x, y, slotSize);
       if (!drew) {
         ctx.fillStyle = "#fff";
@@ -6518,9 +6622,7 @@ function drawInventory(inv, equipment) {
     }
   }
 
-
   // ---- Item submenu (Use / Bind to hotbar) ----
-  // Only used for consumables; opened by clicking a consumable in the inventory grid.
   if (invItemMenu) {
     const cur = slots?.[invItemMenu.slotIndex];
     if (!cur || cur.id !== invItemMenu.itemId) {
@@ -6536,12 +6638,10 @@ function drawInventory(inv, equipment) {
       let mx = invItemMenu.x;
       let my = invItemMenu.y;
 
-      // If we'd overflow right, pop to the left of the slot instead.
       if (mx + menuW > canvas.width - 8) {
         mx = (invItemMenu.x - menuW) - 16;
       }
 
-      // Clamp to screen bounds
       mx = clamp(mx, 8, canvas.width - menuW - 8);
       my = clamp(my, 8, canvas.height - menuH - 8);
 
@@ -6557,7 +6657,6 @@ function drawInventory(inv, equipment) {
       ctx.strokeStyle = "rgba(255,255,255,0.20)";
       ctx.strokeRect(panel.x, panel.y, panel.w, panel.h);
 
-      // Buttons
       ctx.fillStyle = "rgba(255,255,255,0.06)";
       ctx.fillRect(btnUse.x, btnUse.y, btnUse.w, btnUse.h);
       ctx.fillRect(btnBind.x, btnBind.y, btnBind.w, btnBind.h);
@@ -6592,6 +6691,7 @@ function drawInventory(inv, equipment) {
 
   ctx.restore();
 }
+
 
 /* ======================
    INVENTORY TOOLTIP (hover)
@@ -6765,7 +6865,8 @@ function getInventoryHover(mx, my, inv, equipment, player) {
   const sy = Math.floor((my - g.y) / g.slotSize);
   if (sx < 0 || sy < 0 || sx >= g.cols || sy >= g.rows) return null;
 
-  const slotIndex = sy * g.cols + sx;
+  const relIndex = sy * g.cols + sx;
+  const slotIndex = (Number.isFinite(g.offset) ? g.offset : 0) + relIndex;
   const slot = inv?.slots ? inv.slots[slotIndex] : null;
   if (!slot) return null;
 

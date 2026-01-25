@@ -132,7 +132,7 @@ async function dbSavePlayer(p) {
       Number.isFinite(p.y) ? p.y : 0,
       p.gold ?? 0,
       JSON.stringify(p.equipment || { weapon: null, armor: null, hat: null, accessory: null }),
-      JSON.stringify(p.inventory || { size: 24, slots: [] }),
+      JSON.stringify(p.inventory || createDefaultInventory()),
       JSON.stringify(p.quests || {}),
       JSON.stringify(p.hotbar || new Array(6).fill(null)),
       JSON.stringify(p.monsterBook || {}),
@@ -165,7 +165,9 @@ function applyRowToPlayer(p, row) {
 
   p.inventory = row.inventory && typeof row.inventory === "object"
     ? row.inventory
-    : (p.inventory || { size: 24, slots: [] });
+    : (p.inventory || createDefaultInventory());
+
+  normalizeInventory(p);
 
   p.quests = row.quests && typeof row.quests === "object"
     ? row.quests
@@ -830,6 +832,117 @@ const WEAPONS = ["sword", "spear", "wand"];
 /* ======================
    ITEMS / INVENTORY
 ====================== */
+
+const INV_TAB_SIZE = 24; // must match client grid (6x4)
+const INV_TAB_COUNT = 3;
+const INV_TOTAL_SLOTS = INV_TAB_SIZE * INV_TAB_COUNT;
+
+function invTabRange(tabIndex) {
+  const t = Math.max(0, Math.min(INV_TAB_COUNT - 1, tabIndex | 0));
+  const start = t * INV_TAB_SIZE;
+  const end = start + INV_TAB_SIZE; // exclusive
+  return { start, end };
+}
+
+function isEquipmentDef(def) {
+  const s = def?.slot;
+  return s === "weapon" || s === "armor" || s === "hat" || s === "accessory";
+}
+
+function isConsumableDef(def) {
+  return typeof def?.onUse === "function";
+}
+
+function invTabForItemId(itemId) {
+  const def = itemId ? ITEMS[itemId] : null;
+  if (!def) return 2; // other by default
+  if (isEquipmentDef(def)) return 0; // equipment tab
+  if (isConsumableDef(def)) return 1; // consumables tab
+  return 2; // other tab
+}
+
+function createDefaultInventory() {
+  // Default to a 3-tab bag (72 slots total). Existing saves may get migrated by normalizeInventory().
+  const slots = new Array(INV_TOTAL_SLOTS).fill(null);
+
+  // Starter items go in the Equipment tab by default.
+  slots[0] = { id: "branch_sword", qty: 1 };
+  slots[1] = { id: "lucky_charm", qty: 1 };
+  slots[2] = { id: "bone_sword", qty: 1 };
+  slots[3] = { id: "trident_spear", qty: 1 };
+
+  return { size: INV_TOTAL_SLOTS, slots };
+}
+
+// Ensure inventory is 3 tabs / 72 slots and (best-effort) sorted into the right tab ranges.
+// This runs on login/load so older saves seamlessly upgrade.
+function normalizeInventory(p) {
+  if (!p) return;
+  const curSlots = (p.inventory && Array.isArray(p.inventory.slots)) ? p.inventory.slots : [];
+  const needsResize = (p.inventory?.size !== INV_TOTAL_SLOTS) || (curSlots.length !== INV_TOTAL_SLOTS);
+
+  // Quick path: already correct shape
+  if (!needsResize) return;
+
+  // Gather items from old inventory (keep weaponBonus if present)
+  const items = [];
+  for (const s of curSlots) {
+    if (s && typeof s === "object" && typeof s.id === "string" && (s.qty ?? 1) > 0) {
+      items.push({ id: s.id, qty: s.qty ?? 1, weaponBonus: s.weaponBonus });
+    }
+  }
+
+  // Rebuild slots and re-insert items into their target tabs (overflow spills into "Other")
+  const newSlots = new Array(INV_TOTAL_SLOTS).fill(null);
+
+  function tryPlaceStack(itemId, qty, weaponBonus) {
+    const def = ITEMS[itemId];
+    if (!def || qty <= 0) return qty;
+
+    const primaryTab = invTabForItemId(itemId);
+    const ranges = [invTabRange(primaryTab)];
+    if (primaryTab !== 2) ranges.push(invTabRange(2)); // overflow to Other
+
+    // stack into existing
+    for (const r of ranges) {
+      for (let i = r.start; i < r.end && qty > 0; i++) {
+        const slot = newSlots[i];
+        if (slot && slot.id === itemId && (slot.qty ?? 1) < def.maxStack) {
+          const space = def.maxStack - (slot.qty ?? 1);
+          const add = Math.min(space, qty);
+          slot.qty = (slot.qty ?? 1) + add;
+          qty -= add;
+        }
+      }
+    }
+
+    // empty slots
+    for (const r of ranges) {
+      for (let i = r.start; i < r.end && qty > 0; i++) {
+        if (!newSlots[i]) {
+          const add = Math.min(def.maxStack, qty);
+          if (def.slot === "weapon") {
+            newSlots[i] = { id: itemId, qty: add, weaponBonus: Number.isFinite(weaponBonus) ? weaponBonus : rollWeaponBonus(itemId) };
+          } else {
+            newSlots[i] = { id: itemId, qty: add };
+          }
+          qty -= add;
+        }
+      }
+    }
+
+    return qty;
+  }
+
+  for (const it of items) {
+    let remaining = it.qty ?? 1;
+    remaining = tryPlaceStack(it.id, remaining, it.weaponBonus);
+    // If we truly can't fit, drop the remainder (should be very rare with 72 slots)
+  }
+
+  p.inventory = { size: INV_TOTAL_SLOTS, slots: newSlots };
+}
+
 const ITEMS = {
   // currency
   coin: { id: "coin", name: "Coin", maxStack: 9999 },
@@ -882,7 +995,7 @@ potion_purple: {
   blue_umbrella_spear: { id: "blue_umbrella_spear", name: "Sky Blue Umbrella", type: "weapon", slot: "weapon", weaponKey: "spear", maxStack: 1, weaponSpeed: 2, knockbackMul: 1.5 },
   candy_cane_spear: { id: "candy_cane_spear", name: "North Pole", type: "weapon", slot: "weapon", weaponKey: "spear", maxStack: 1 , weaponSpeed: 1.2, knockbackMul: 1.5 },
   fang_spear:       { id: "fang_spear",       name: "Twin Fang",       type: "weapon", slot: "weapon", weaponKey: "spear", maxStack: 1 , weaponSpeed: 1.2, knockbackMul: 1.5 },
-  trident_spear:    { id: "trident_spear",    name: "Trident",    type: "weapon", slot: "weapon", weaponKey: "spear", maxStack: 1 , weaponSpeed: 1.2, knockbackMul: 1.5 },
+  trident_spear:    { id: "trident_spear",    name: "Trident",    type: "weapon", slot: "weapon", weaponKey: "spear", maxStack: 1 , weaponSpeed: 1.5, knockbackMul: 2 },
   training_wand:  { id: "training_wand",  name: "Training Wand",  type: "weapon", slot: "weapon", weaponKey: "wand",  maxStack: 1 , weaponSpeed: 1.2 },
   bone_wand:      { id: "bone_wand",      name: "Bone Wand", type: "weapon", slot: "weapon", weaponKey: "wand",  maxStack: 1 , weaponSpeed: 1.2 },
   cloth_armor:   { id: "cloth_armor",   name: "Apprentice Robe",   type: "armor",     slot: "armor",     maxStack: 1 },
@@ -899,47 +1012,57 @@ function isHealingConsumable(def) {
   return id === "potion_small" || id === "potion_green" || id === "potion_purple";
 }
 
+
 function addItemToInventory(p, itemId, amount, weaponBonusOverride = null) {
   const def = ITEMS[itemId];
   if (!def || amount <= 0) return false;
 
-  // First try to stack into existing stacks (for stackable items like coins, potions, etc.)
-  for (const slot of p.inventory.slots) {
-    if (slot && slot.id === itemId && slot.qty < def.maxStack) {
-      const space = def.maxStack - slot.qty;
-      const add = Math.min(space, amount);
-      slot.qty += add;
-      amount -= add;
-      if (amount <= 0) return true;
+  // Decide which tab this item belongs to (0=equip,1=consumable,2=other)
+  const primaryTab = invTabForItemId(itemId);
+  const ranges = [invTabRange(primaryTab)];
+  // Overflow: if the "correct" tab is full, spill into Other so items are not lost.
+  if (primaryTab !== 2) ranges.push(invTabRange(2));
+
+  const slots = (p && p.inventory && Array.isArray(p.inventory.slots)) ? p.inventory.slots : null;
+  if (!slots) return false;
+
+  // First try to stack into existing stacks (within allowed ranges)
+  for (const r of ranges) {
+    for (let i = r.start; i < r.end && amount > 0; i++) {
+      const slot = slots[i];
+      if (slot && slot.id === itemId && (slot.qty ?? 1) < def.maxStack) {
+        const space = def.maxStack - (slot.qty ?? 1);
+        const add = Math.min(space, amount);
+        slot.qty = (slot.qty ?? 1) + add;
+        amount -= add;
+      }
     }
   }
+  if (amount <= 0) return true;
 
-  // Then fill empty slots with new stacks.
-  // Weapons get their random roll the moment they enter the inventory,
-  // so the client can show their stats on hover. If a specific roll is provided
-  // (e.g. from a dropped weapon with an existing bonus), preserve that instead.
-  for (let i = 0; i < p.inventory.slots.length && amount > 0; i++) {
-    if (!p.inventory.slots[i]) {
-      const add = Math.min(def.maxStack, amount);
+  // Then fill empty slots with new stacks, within allowed ranges.
+  // Weapons get their roll when entering the bag so the client can show hover stats.
+  for (const r of ranges) {
+    for (let i = r.start; i < r.end && amount > 0; i++) {
+      if (!slots[i]) {
+        const add = Math.min(def.maxStack, amount);
 
-      if (def.slot === "weapon") {
-        let bonus;
-        if (Number.isFinite(weaponBonusOverride)) {
-          bonus = weaponBonusOverride;
+        if (def.slot === "weapon") {
+          const bonus = Number.isFinite(weaponBonusOverride)
+            ? weaponBonusOverride
+            : rollWeaponBonus(itemId);
+
+          slots[i] = {
+            id: itemId,
+            qty: add,
+            weaponBonus: bonus,
+          };
         } else {
-          bonus = rollWeaponBonus(itemId);
+          slots[i] = { id: itemId, qty: add };
         }
 
-        p.inventory.slots[i] = {
-          id: itemId,
-          qty: add,
-          weaponBonus: bonus,
-        };
-      } else {
-        p.inventory.slots[i] = { id: itemId, qty: add };
+        amount -= add;
       }
-
-      amount -= add;
     }
   }
 
@@ -1509,49 +1632,79 @@ function attemptBasicAttack(ws, p, msg, nowMs = Date.now()) {
 
   // SPEAR: thrust hitbox
   if (weaponKey === "spear") {
-    // Basic attacks normally hit 1 target; mastery can raise p.basicHitCap to 2/3/4...
+    // Spear thrust: delay the actual hit so damage lines up with the poke extension.
+    // This prevents mobs from taking damage before the spear visually reaches them.
+    const SPEAR_HIT_FRACTION = 0.55; // ~halfway through the thrust feels best in practice.
     const hitCap = Math.max(1, p.basicHitCap ?? 1);
 
-    const candidates = [];
-    for (const m of mobs.values()) {
-      if (m.mapId !== p.mapId) continue;
-      if (m.respawnIn > 0) continue;
-      if (m.hp <= 0) continue;
+    // Snapshot the attacker origin + facing at the start of the animation.
+    const sx = p.x;
+    const sy = p.y;
+    const sfacing = { ...(p.facing || { x: 0, y: 1 }) };
+    const mapIdAtAttack = p.mapId;
 
-      if (spearHitTest(p, m)) {
-        candidates.push(m);
+    // Monotonic token so delayed hits from older attacks can’t fire.
+    const seq = (p.basicAtkSeq = (p.basicAtkSeq || 0) + 1);
+
+    const doSpearHits = () => {
+      const snapP = { x: sx, y: sy, facing: sfacing };
+
+      const candidates = [];
+      for (const m of mobs.values()) {
+        if (m.mapId !== mapIdAtAttack) continue;
+        if (m.respawnIn > 0) continue;
+        if (m.hp <= 0) continue;
+
+        if (spearHitTest(snapP, m)) {
+          candidates.push(m);
+        }
       }
-    }
 
-    candidates.sort((a, b) => dist(p.x, p.y, a.x, a.y) - dist(p.x, p.y, b.x, b.y));
+      // closest first, then hit up to cap
+      candidates.sort((a, b) => dist(sx, sy, a.x, a.y) - dist(sx, sy, b.x, b.y));
 
-    let hits = 0;
-    for (const m of candidates) {
-      if (hits >= hitCap) break;
-      // Use inclusive roll helper (and avoid relying on randInt being present in older builds)
-      const dmg = randIntInclusive(baseAtk - 2, baseAtk + 2);
-      m.hp -= dmg;
-      m.lastHitBy = p.id;
+      let hits = 0;
+      for (const m of candidates) {
+        if (hits >= hitCap) break;
 
-      // Big knockback if this single hit is strong enough.
-      maybeBigKnockback(m, p.x, p.y, dmg, getPlayerWeaponKnockbackMul(p));
-// Basic attacks should provoke aggro.
-      setMobAggro(m, p.id);
+        const dmg = randIntInclusive(baseAtk - 2, baseAtk + 2);
+        m.hp -= dmg;
+        m.lastHitBy = p.id;
 
-      broadcastToMap(p.mapId, {
-        type: "hit",
-        targetId: m.id,
-        targetKind: "mob",
-        srcX: p.x,
-        srcY: p.y,
-        amount: dmg,
-        fx: "stab",
-      });
+        maybeBigKnockback(m, sx, sy, dmg, getPlayerWeaponKnockbackMul(p));
+        setMobAggro(m, p.id);
 
-      if (m.hp <= 0) {
-        killMobAndReward(m, p.id);
+        broadcastToMap(mapIdAtAttack, {
+          type: "hit",
+          targetId: m.id,
+          targetKind: "mob",
+          srcX: sx,
+          srcY: sy,
+          amount: dmg,
+          fx: "stab",
+        });
+
+        if (m.hp <= 0) {
+          killMobAndReward(m, p.id);
+        }
+        hits++;
       }
-      hits++;
+    };
+
+    const delayMs = Math.max(0, Math.round(swingSec * 1000 * SPEAR_HIT_FRACTION));
+
+    if (delayMs > 0) {
+      setTimeout(() => {
+        // Player may have disconnected, died, respawned, changed maps, etc.
+        if (!players.has(p.id)) return;
+        if ((p.basicAtkSeq || 0) !== seq) return;
+        if (p.hp <= 0 || p.respawnIn > 0) return;
+        if (p.mapId !== mapIdAtAttack) return;
+
+        doSpearHits();
+      }, delayMs);
+    } else {
+      doSpearHits();
     }
 
     return true;
@@ -1684,7 +1837,7 @@ wss.on("connection", (ws) => {
     hotbar: new Array(6).fill(null),
 
     // inventory (server authoritative)
-    inventory: { size: 24, slots: [ { id: "branch_sword", qty: 1 },{ id: "lucky_charm", qty: 1 },{ id: "bone_sword", qty: 1 },{ id: "trident_spear", qty: 1 }, ...Array(19).fill(null) ] },
+    inventory: createDefaultInventory(),
 
 // quests (server authoritative)
 quests: { jangoon_red_duke: { started: false, 
@@ -2424,6 +2577,18 @@ setMobAggro(m, p.id);
         const outgoingWeaponBonus =
           (equipSlot === "weapon" && Number.isFinite(p.weaponBonus)) ? p.weaponBonus : null;
 
+        // If the outgoing item can't go back into this inventory tab, relocate it first (or abort).
+        // Equipment items normally live in the Equipment tab; older saves/edge cases may click from other tabs.
+        const slotTab = Math.floor(slotIndex / INV_TAB_SIZE);
+        const outgoingNeedsRelocate = !!outgoingId && slotTab !== 0; // 0 = equipment tab
+        let outgoingRelocated = false;
+        if (outgoingNeedsRelocate) {
+          const okOut = addItemToInventory(p, outgoingId, 1, outgoingWeaponBonus);
+          if (!okOut) return; // no space for outgoing item -> abort equip
+          outgoingRelocated = true;
+        }
+
+
         // Determine weapon roll BEFORE mutating the stack
         let newWeaponBonus = 0;
         if (equipSlot === "weapon") {
@@ -2443,9 +2608,8 @@ setMobAggro(m, p.id);
         } else {
           p.inventory.slots[slotIndex] = null;
         }
-
-        // Place outgoing equipped item into the SAME inventory slot
-        if (outgoingId) {
+        // Place outgoing equipped item into the SAME inventory slot (only if we didn't relocate it)
+        if (outgoingId && !outgoingRelocated) {
           if (equipSlot === "weapon") {
             p.inventory.slots[slotIndex] = {
               id: outgoingId,
@@ -2523,23 +2687,18 @@ setMobAggro(m, p.id);
       const equippedId = p.equipment[slotName];
       if (!equippedId) return;
 
-      const empty = p.inventory.slots.findIndex(s => !s);
-      if (empty === -1) return; // inventory full
+      // Preserve weapon roll when putting it back into the bag.
+      const weaponBonus = (slotName === "weapon" && Number.isFinite(p.weaponBonus)) ? p.weaponBonus : null;
 
-      const slot = { id: equippedId, qty: 1 };
+      // Put the item back into inventory (correct tab; overflow to Other if needed)
+      const ok = addItemToInventory(p, equippedId, 1, weaponBonus);
+      if (!ok) return; // inventory full
 
-      if (slotName === "weapon") {
-        // Preserve the current weapon roll when putting it back into the bag.
-        if (Number.isFinite(p.weaponBonus)) {
-          slot.weaponBonus = p.weaponBonus;
-        }
-        p.weaponBonus = 0;
-      }
-
-      p.inventory.slots[empty] = slot;
+      // Unequip
       p.equipment[slotName] = null;
 
       if (slotName === "weapon") {
+        p.weaponBonus = 0;
         p.weapon = "sword"; // default unarmed behavior uses sword logic for now
       }
 
@@ -2548,26 +2707,43 @@ setMobAggro(m, p.id);
       return;
     }
 
+
+
     
     if (msg.type === "invMove") {
       if (p.hp <= 0 || p.respawnIn > 0) return;
-      const from = Number(msg.from);
-      const to = Number(msg.to);
-      if (!Number.isFinite(from) || !Number.isFinite(to)) return;
-      if (from === to) return;
 
-      const slots = p.inventory && Array.isArray(p.inventory.slots) ? p.inventory.slots : null;
-      if (!slots) return;
-      if (from < 0 || from >= slots.length || to < 0 || to >= slots.length) return;
+      const from = msg.from | 0;
+      const to = msg.to | 0;
+      const slots = p.inventory?.slots;
+      if (!Array.isArray(slots)) return;
+
+      if (from < 0 || to < 0 || from >= slots.length || to >= slots.length) return;
+      if (from === to) return;
 
       const fromStack = slots[from];
       const toStack = slots[to];
-      if (!fromStack && !toStack) return;
 
-      slots[from] = toStack || null;
-      slots[to] = fromStack || null;
+      // Prevent dragging items into the wrong tab.
+      // Rule: an item may be moved within its current tab, or into its "primary" tab.
+      function canPlace(stack, fromIdx, toIdx) {
+        if (!stack) return true;
+        const curTab = Math.floor(fromIdx / INV_TAB_SIZE);
+        const destTab = Math.floor(toIdx / INV_TAB_SIZE);
+        const primaryTab = invTabForItemId(stack.id);
+        return destTab === curTab || destTab === primaryTab;
+      }
+
+      if (!canPlace(fromStack, from, to)) return;
+      if (!canPlace(toStack, to, from)) return;
+
+      // swap
+      slots[from] = toStack;
+      slots[to] = fromStack;
       return;
     }
+
+
 
 if (msg.type === "editTile") {
       if (!ENABLE_MAP_EDITOR) return;
@@ -3419,7 +3595,39 @@ function tickStep(dt) {
             });
           }
         }
+        // While aggro/chasing, occasionally "juke" in a random direction briefly.
+        // This helps mobs slip around corners/tight corridors without full pathfinding.
+        // Tunables:
+        // - A "juke" lasts up to ~1s (200..1000ms)
+        // - Cooldown between juke decisions is ~0.9..3.1s
+        const nowJukeMs = nowAggroMs;
+        const until = m.aggroRandomUntilMs ?? 0;
+        const next = m.aggroRandomNextMs ?? 0;
+
+        if (nowJukeMs < until) {
+          // Continue current juke direction
+          const jx = Number.isFinite(m.aggroRandomDirX) ? m.aggroRandomDirX : dirX;
+          const jy = Number.isFinite(m.aggroRandomDirY) ? m.aggroRandomDirY : dirY;
+          const jl = Math.hypot(jx, jy) || 1;
+          dirX = jx / jl;
+          dirY = jy / jl;
+        } else if (nowJukeMs >= next) {
+          // Decide whether to start a new juke
+          // (Probability is per "decision", not per tick.)
+          if (Math.random() < 0.30) {
+            const [jx, jy] = randomDir();
+            m.aggroRandomDirX = jx;
+            m.aggroRandomDirY = jy;
+            m.aggroRandomUntilMs = nowJukeMs + (200 + Math.random() * 800); // up to ~1s
+          }
+          m.aggroRandomNextMs = nowJukeMs + (900 + Math.random() * 2200);
+        }
+
+
       } else {
+        // Not currently aggro-chasing: clear any pending juke state.
+        m.aggroRandomUntilMs = 0;
+        m.aggroRandomNextMs = 0;
         m.changeDirIn -= dt;
         if (m.changeDirIn <= 0) {
           const [dx, dy] = randomDir();
