@@ -1,8 +1,16 @@
-/* 
-  Mobile analog stick controls (left side)
-  - Enables only on touch/coarse-pointer devices
-  - Prevents page scrolling/zooming gestures that interfere with gameplay
-  - Emits Arrow-key events so existing keyboard movement code keeps working
+/*
+  MobileControls
+  - Detects coarse-pointer/mobile-ish browsers
+  - Adds a left-side, touch-activated analog stick (virtual joystick)
+  - Invisible when not in use
+
+  Design goal: keep game code untouched.
+  We simulate keyboard Arrow key events so your existing key handlers run.
+
+  Installation:
+    1) Save this file as: public/mobile_controls.js
+    2) In index.html, add this line BEFORE your main inline <script>:
+         <script src="/mobile_controls.js"></script>
 */
 
 (() => {
@@ -12,70 +20,98 @@
     try {
       const ua = (navigator.userAgent || "").toLowerCase();
       const uaMobile = /android|iphone|ipod|ipad|iemobile|opera mini|mobile/.test(ua);
-
       const coarse = typeof window.matchMedia === "function" && window.matchMedia("(pointer: coarse)").matches;
       const noHover = typeof window.matchMedia === "function" && window.matchMedia("(hover: none)").matches;
-
-      const hasTouch = (navigator.maxTouchPoints && navigator.maxTouchPoints > 0) || ("ontouchstart" in window);
-
-      // Prefer capability detection; UA is fallback.
-      return !!((hasTouch && coarse && noHover) || (uaMobile && hasTouch));
+      // If it's a tablet with a mouse, (pointer:coarse) may be false; UA covers most cases.
+      return !!(uaMobile || (coarse && noHover));
     } catch {
       return false;
     }
   }
 
   const isMobile = detectMobile();
+  // Make it easy for the rest of your client code to check this later if you want.
   window.__IS_MOBILE__ = isMobile;
+
+  // Expose a minimal API (optional)
+  window.MobileControls = {
+    isMobile,
+  };
+
   if (!isMobile) return;
 
-  // --- Hard scroll lock (mobile only) ---
-  // iOS Safari often scrolls unless body is fixed.
-  const scrollY = window.scrollY || 0;
-  const html = document.documentElement;
-  const body = document.body;
+  // ---- Mobile layout: make the game fill the viewport so you don't need to scroll ----
+  (function applyMobileLayout() {
+    try {
+      // Tag the page for mobile-only CSS rules
+      document.documentElement.classList.add("mc-mobile");
+      document.body.classList.add("mc-mobile");
 
-  // Add a class for styling/debugging if you want
-  html.classList.add("mc-mobile");
-  body.classList.add("mc-mobile");
+      // Hide the desktop header/instructions above the canvas
+      document.querySelectorAll("body > h1, body > p").forEach((el) => {
+        el.style.display = "none";
+      });
 
-  // Freeze the page at current scroll position
-  body.style.position = "fixed";
-  body.style.top = `-${scrollY}px`;
-  body.style.left = "0";
-  body.style.right = "0";
-  body.style.width = "100%";
+      // Mobile browsers have a "dynamic" address bar; 100vh can be wrong.
+      // Use a CSS variable based on the real innerHeight.
+      const setVh = () => {
+        document.documentElement.style.setProperty("--vh", (window.innerHeight * 0.01) + "px");
+      };
+      setVh();
+      window.addEventListener("resize", setVh, { passive: true });
+      window.addEventListener("orientationchange", setVh, { passive: true });
 
-  html.style.overflow = "hidden";
-  body.style.overflow = "hidden";
-  html.style.height = "100%";
-  body.style.height = "100%";
+      const wrap = document.getElementById("gameWrap");
+      if (wrap) {
+        wrap.style.position = "fixed";
+        wrap.style.left = "0";
+        wrap.style.top = "0";
+        wrap.style.width = "100vw";
+        wrap.style.height = "calc(var(--vh, 1vh) * 100)";
+        wrap.style.margin = "0";
+      }
 
-  // --- CSS ---
+      const canvas = document.getElementById("c");
+      if (canvas) {
+        canvas.style.display = "block";
+        canvas.style.width = "100%";
+        canvas.style.height = "100%";
+        canvas.style.border = "0";
+        canvas.style.touchAction = "none";
+      }
+
+      // Prevent page scroll on mobile (game is full-screen now)
+      document.body.style.margin = "0";
+      document.body.style.overflow = "hidden";
+      document.documentElement.style.overflow = "hidden";
+    } catch (e) {
+      // If anything fails, we just don't apply layout changes.
+      console.warn("[MobileControls] applyMobileLayout failed:", e);
+    }
+  })();
+
+  // ---- CSS ----
   const style = document.createElement("style");
   style.textContent = `
-    html.mc-mobile, body.mc-mobile {
-      overscroll-behavior: none;
-      touch-action: none; /* stop browser panning/zoom gestures */
-      -webkit-text-size-adjust: 100%;
-    }
+    /* Mobile page layout helpers */
+    html.mc-mobile, body.mc-mobile { height: 100%; overflow: hidden; margin: 0; padding: 0; }
+    html.mc-mobile #gameWrap { position: fixed; inset: 0; width: 100vw; height: calc(var(--vh, 1vh) * 100); }
+    html.mc-mobile canvas#c { width: 100%; height: 100%; border: 0 !important; display: block; touch-action: none; }
+    html.mc-mobile h1, html.mc-mobile p { display: none; }
 
-    /* Big invisible touch zone on left half of the screen */
+    /* Mobile analog stick */
     .mc-touch-zone {
-      position: fixed;
+      position: absolute;
       left: 0;
       top: 0;
-      width: 50vw;
-      height: 100vh;
-      z-index: 2147483647;
+      width: 50%;
+      height: 100%;
+      z-index: 50;
       background: transparent;
       touch-action: none;
-      pointer-events: auto;
       -webkit-user-select: none;
       user-select: none;
-      -webkit-tap-highlight-color: transparent;
     }
-
     .mc-joystick {
       position: absolute;
       left: 0;
@@ -84,213 +120,256 @@
       height: 150px;
       margin-left: 0;
       margin-top: 0;
-      border-radius: 999px;
-      background: rgba(255,255,255,0.10);
-      border: 2px solid rgba(255,255,255,0.15);
-      backdrop-filter: blur(2px);
-      -webkit-backdrop-filter: blur(2px);
+      transform: translate(-50%, -50%);
+      opacity: 0;
       pointer-events: none;
+      transition: opacity 120ms ease;
+      z-index: 60;
     }
-
+    .mc-joystick.mc-active {
+      opacity: 1;
+    }
+    .mc-joy-base {
+      position: absolute;
+      left: 50%;
+      top: 50%;
+      width: 130px;
+      height: 130px;
+      transform: translate(-50%, -50%);
+      border-radius: 999px;
+      background: rgba(0,0,0,0.18);
+      border: 2px solid rgba(255,255,255,0.20);
+      backdrop-filter: blur(2px);
+    }
     .mc-joy-knob {
       position: absolute;
       left: 50%;
       top: 50%;
-      width: 64px;
-      height: 64px;
-      margin-left: -32px;
-      margin-top: -32px;
+      width: 62px;
+      height: 62px;
+      transform: translate(-50%, -50%);
       border-radius: 999px;
-      background: rgba(255,255,255,0.18);
-      border: 2px solid rgba(255,255,255,0.22);
-      box-shadow: 0 4px 16px rgba(0,0,0,0.25);
-      pointer-events: none;
+      background: rgba(255,255,255,0.22);
+      border: 2px solid rgba(255,255,255,0.25);
+      box-shadow: 0 6px 18px rgba(0,0,0,0.25);
     }
   `;
   document.head.appendChild(style);
 
-  // --- DOM elements ---
+  // ---- DOM ----
+  function getGameWrap() {
+    // Your page uses #gameWrap; fall back to body if not found.
+    return document.getElementById("gameWrap") || document.body;
+  }
+
+  const wrap = getGameWrap();
+  // Ensure wrap is a positioned container so absolute children work.
+  const wrapStyle = window.getComputedStyle(wrap);
+  if (wrapStyle.position === "static") {
+    wrap.style.position = "relative";
+  }
+
   const zone = document.createElement("div");
   zone.className = "mc-touch-zone";
   zone.setAttribute("aria-hidden", "true");
 
   const joy = document.createElement("div");
   joy.className = "mc-joystick";
-  joy.style.display = "none";
+  joy.setAttribute("aria-hidden", "true");
+  joy.innerHTML = `
+    <div class="mc-joy-base"></div>
+    <div class="mc-joy-knob"></div>
+  `;
 
-  const knob = document.createElement("div");
-  knob.className = "mc-joy-knob";
-  joy.appendChild(knob);
+  wrap.appendChild(zone);
+  wrap.appendChild(joy);
 
-  // Append last to ensure it's on top
-  document.body.appendChild(zone);
-  document.body.appendChild(joy);
+  const knob = joy.querySelector(".mc-joy-knob");
 
-  // --- Key event helpers ---
-  const pressed = new Set();
-  function keyDown(key) {
-    if (pressed.has(key)) return;
-    pressed.add(key);
-    window.dispatchEvent(new KeyboardEvent("keydown", { key, bubbles: true }));
-  }
-  function keyUp(key) {
-    if (!pressed.has(key)) return;
-    pressed.delete(key);
-    window.dispatchEvent(new KeyboardEvent("keyup", { key, bubbles: true }));
-  }
-  function releaseAll() {
-    ["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"].forEach(keyUp);
-  }
+  // ---- Key simulation ----
+  const KEYMAP = {
+    up: "ArrowUp",
+    down: "ArrowDown",
+    left: "ArrowLeft",
+    right: "ArrowRight",
+  };
 
-  // --- Joystick math/state ---
-  let activeId = null;
-  let baseX = 0, baseY = 0;
-  const radius = 55;
-  let joystickActive = false;
+  const held = { up: false, down: false, left: false, right: false };
 
-  function placeJoystick(x, y) {
-    // Center the joystick circle on the finger.
-    joy.style.left = `${x - 75}px`;
-    joy.style.top = `${y - 75}px`;
-    joy.style.display = "block";
-  }
-
-  function setKnob(dx, dy) {
-    knob.style.transform = `translate(${dx}px, ${dy}px)`;
-  }
-
-  function updateFromDelta(dx, dy) {
-    // clamp to radius
-    const len = Math.hypot(dx, dy) || 1;
-    const clamped = Math.min(radius, len);
-    const nx = (dx / len) * clamped;
-    const ny = (dy / len) * clamped;
-
-    setKnob(nx, ny);
-
-    const dead = 12;
-    const horiz = Math.abs(nx) > dead;
-    const vert = Math.abs(ny) > dead;
-
-    if (!horiz) { keyUp("ArrowLeft"); keyUp("ArrowRight"); }
-    else {
-      if (nx < 0) { keyDown("ArrowLeft"); keyUp("ArrowRight"); }
-      else { keyDown("ArrowRight"); keyUp("ArrowLeft"); }
-    }
-
-    if (!vert) { keyUp("ArrowUp"); keyUp("ArrowDown"); }
-    else {
-      if (ny < 0) { keyDown("ArrowUp"); keyUp("ArrowDown"); }
-      else { keyDown("ArrowDown"); keyUp("ArrowUp"); }
+  function dispatchKey(key, type) {
+    try {
+      const ev = new KeyboardEvent(type, {
+        key,
+        code: key,
+        bubbles: true,
+        cancelable: true,
+      });
+      window.dispatchEvent(ev);
+    } catch {
+      // Ignore
     }
   }
 
-  function getPointFromTouch(t) {
-    return { x: t.clientX, y: t.clientY };
+  function setHeld(next) {
+    for (const dir of ["up", "down", "left", "right"]) {
+      const v = !!next[dir];
+      if (held[dir] === v) continue;
+      held[dir] = v;
+      dispatchKey(KEYMAP[dir], v ? "keydown" : "keyup");
+    }
   }
 
-  function begin(x, y, id) {
-    activeId = id;
-    baseX = x;
-    baseY = y;
-    joystickActive = true;
-    placeJoystick(x, y);
-    setKnob(0, 0);
+  function clearHeld() {
+    setHeld({ up: false, down: false, left: false, right: false });
   }
 
-  function move(x, y) {
-    const dx = x - baseX;
-    const dy = y - baseY;
-    updateFromDelta(dx, dy);
+  // ---- Joystick math + state ----
+  const RADIUS = 52;          // knob travel radius (px)
+  const DEADZONE = 0.18;      // normalized deadzone
+  const AXIS_ON = 0.35;       // normalized axis threshold
+
+  let active = false;
+  let pointerId = null;
+  let origin = { x: 0, y: 0 };
+
+  function showJoystickAt(x, y) {
+    joy.style.left = `${x}px`;
+    joy.style.top = `${y}px`;
+    joy.classList.add("mc-active");
+    // Center knob
+    if (knob) knob.style.transform = "translate(-50%, -50%) translate(0px, 0px)";
+  }
+
+  function hideJoystick() {
+    joy.classList.remove("mc-active");
+  }
+
+  function updateJoystick(x, y) {
+    const dx = x - origin.x;
+    const dy = y - origin.y;
+    const dist = Math.hypot(dx, dy) || 0;
+
+    let nx = 0, ny = 0;
+    if (dist > 0) {
+      const clamped = Math.min(dist, RADIUS);
+      const scale = clamped / dist;
+      const kx = dx * scale;
+      const ky = dy * scale;
+      if (knob) knob.style.transform = `translate(-50%, -50%) translate(${kx}px, ${ky}px)`;
+
+      // Normalized (-1..1) based on clamped distance
+      nx = (dx / RADIUS);
+      ny = (dy / RADIUS);
+      // Clamp normalization
+      nx = Math.max(-1, Math.min(1, nx));
+      ny = Math.max(-1, Math.min(1, ny));
+    } else {
+      if (knob) knob.style.transform = "translate(-50%, -50%) translate(0px, 0px)";
+    }
+
+    // Deadzone
+    const mag = Math.hypot(nx, ny);
+    if (mag < DEADZONE) {
+      setHeld({ up: false, down: false, left: false, right: false });
+      return;
+    }
+
+    setHeld({
+      left: nx < -AXIS_ON,
+      right: nx > AXIS_ON,
+      up: ny < -AXIS_ON,
+      down: ny > AXIS_ON,
+    });
+  }
+
+  function startAt(clientX, clientY, pid) {
+    active = true;
+    pointerId = pid;
+    origin = { x: clientX, y: clientY };
+    showJoystickAt(clientX, clientY);
+    updateJoystick(clientX, clientY);
   }
 
   function end() {
-    activeId = null;
-    joystickActive = false;
-    joy.style.display = "none";
-    setKnob(0, 0);
-    releaseAll();
+    if (!active) return;
+    active = false;
+    pointerId = null;
+    clearHeld();
+    hideJoystick();
   }
 
-  // --- Prevent scrolling while joystick is active ---
-  // Note: must be passive:false to allow preventDefault.
-  document.addEventListener("touchmove", (e) => {
-    if (joystickActive) e.preventDefault();
-  }, { passive: false });
+  // Prefer Pointer Events
+  const hasPointer = "PointerEvent" in window;
 
-  // Also prevent pinch-zoom inside our zone
-  zone.addEventListener("gesturestart", (e) => e.preventDefault(), { passive: false });
-  zone.addEventListener("gesturechange", (e) => e.preventDefault(), { passive: false });
+  if (hasPointer) {
+    zone.addEventListener("pointerdown", (e) => {
+      // Only react to touch/pen, not mouse.
+      if (e.pointerType === "mouse") return;
+      // Only allow one active pointer for the joystick.
+      if (active) return;
+      e.preventDefault();
+      zone.setPointerCapture(e.pointerId);
+      startAt(e.clientX, e.clientY, e.pointerId);
+    }, { passive: false });
 
-  // --- Touch events (best for iOS reliability) ---
-  zone.addEventListener("touchstart", (e) => {
-    if (activeId !== null) return;
-    if (!e.changedTouches || e.changedTouches.length === 0) return;
+    zone.addEventListener("pointermove", (e) => {
+      if (!active) return;
+      if (e.pointerId !== pointerId) return;
+      e.preventDefault();
+      updateJoystick(e.clientX, e.clientY);
+    }, { passive: false });
 
-    const t = e.changedTouches[0];
-    const p = getPointFromTouch(t);
-    begin(p.x, p.y, t.identifier);
-    e.preventDefault();
-  }, { passive: false });
+    zone.addEventListener("pointerup", (e) => {
+      if (e.pointerId !== pointerId) return;
+      e.preventDefault();
+      end();
+    }, { passive: false });
 
-  zone.addEventListener("touchmove", (e) => {
-    if (activeId === null) return;
-    const touches = e.changedTouches;
-    for (let i = 0; i < touches.length; i++) {
-      const t = touches[i];
-      if (t.identifier === activeId) {
-        const p = getPointFromTouch(t);
-        move(p.x, p.y);
-        e.preventDefault();
-        break;
+    zone.addEventListener("pointercancel", (e) => {
+      if (e.pointerId !== pointerId) return;
+      end();
+    });
+  } else {
+    // Touch fallback
+    zone.addEventListener("touchstart", (e) => {
+      if (active) return;
+      const t = e.changedTouches && e.changedTouches[0];
+      if (!t) return;
+      e.preventDefault();
+      startAt(t.clientX, t.clientY, t.identifier);
+    }, { passive: false });
+
+    zone.addEventListener("touchmove", (e) => {
+      if (!active) return;
+      const touches = e.changedTouches;
+      if (!touches) return;
+      for (let i = 0; i < touches.length; i++) {
+        const t = touches[i];
+        if (t.identifier === pointerId) {
+          e.preventDefault();
+          updateJoystick(t.clientX, t.clientY);
+          break;
+        }
       }
-    }
-  }, { passive: false });
+    }, { passive: false });
 
-  function touchEndLike(e) {
-    if (activeId === null) return;
-    const touches = e.changedTouches;
-    for (let i = 0; i < touches.length; i++) {
-      const t = touches[i];
-      if (t.identifier === activeId) {
-        end();
-        e.preventDefault();
-        break;
+    zone.addEventListener("touchend", (e) => {
+      const touches = e.changedTouches;
+      if (!touches) return;
+      for (let i = 0; i < touches.length; i++) {
+        if (touches[i].identifier === pointerId) {
+          e.preventDefault();
+          end();
+          break;
+        }
       }
-    }
+    }, { passive: false });
+
+    zone.addEventListener("touchcancel", () => end());
   }
 
-  zone.addEventListener("touchend", touchEndLike, { passive: false });
-  zone.addEventListener("touchcancel", touchEndLike, { passive: false });
-
-  // --- Pointer events (Android/modern browsers). Helps if touch events are suppressed. ---
-  zone.addEventListener("pointerdown", (e) => {
-    if (activeId !== null) return;
-    // Only use primary touch pointer
-    if (e.pointerType !== "touch") return;
-    activeId = e.pointerId;
-    begin(e.clientX, e.clientY, e.pointerId);
-    try { zone.setPointerCapture(e.pointerId); } catch {}
-    e.preventDefault();
-  }, { passive: false });
-
-  zone.addEventListener("pointermove", (e) => {
-    if (!joystickActive) return;
-    if (e.pointerId !== activeId) return;
-    move(e.clientX, e.clientY);
-    e.preventDefault();
-  }, { passive: false });
-
-  zone.addEventListener("pointerup", (e) => {
-    if (e.pointerId !== activeId) return;
+  // Safety: if the page blurs, release keys.
+  window.addEventListener("blur", () => {
     end();
-    e.preventDefault();
-  }, { passive: false });
-
-  zone.addEventListener("pointercancel", (e) => {
-    if (e.pointerId !== activeId) return;
-    end();
-    e.preventDefault();
-  }, { passive: false });
-
+  });
 })();
