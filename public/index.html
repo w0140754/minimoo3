@@ -3954,7 +3954,6 @@ canvas.addEventListener("mousedown", (e) => {
   if (editorLayer === "ground") {
     // keep portals/statues intact (server also validates)
     const curr = map[ty][tx];
-    if (curr === PORTAL_TILE) return;
     map[ty][tx] = tile;
     sendEditTile("ground", tx, ty, tile);
   } else {

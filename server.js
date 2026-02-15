@@ -9,16 +9,23 @@ import { getMapTemplates } from "./maps_data.js";
 import pg from "pg";
 const { Pool } = pg;
 
-const pool = process.env.DATABASE_URL
-  ? new Pool({
-      connectionString: process.env.DATABASE_URL,
-      ssl: { rejectUnauthorized: false },
-    })
-  : null;
+// ------------------------------
+// Optional Postgres persistence
+// If the DB is missing / expired / down, the server keeps running
+// (you just lose persistence between sessions).
+// ------------------------------
+let pool = null;
+let postgresHealthy = false;
 
-if (pool) {
+if (process.env.DATABASE_URL) {
+  pool = new Pool({
+    connectionString: process.env.DATABASE_URL,
+    ssl: { rejectUnauthorized: false },
+  });
+
   pool.on("error", (err) => {
     console.error("❌ Postgres pool error:", err?.message || err);
+    postgresHealthy = false;
   });
 }
 
@@ -43,108 +50,122 @@ const ENABLE_DEV_SPAWN = true;
 async function ensurePostgresSchema() {
   if (!pool) {
     console.log("🟦 Postgres disabled (no DATABASE_URL).");
+    postgresHealthy = false;
     return;
   }
 
-  await pool.query(`
-    create table if not exists players (
-      name text primary key,
-      level int not null default 1,
-      xp int not null default 0,
-      xp_next int not null default 0,
-      atk int not null default 10,
-	      speed int not null default 100,
-      hp int not null default 100,
-      max_hp int not null default 100,
-      map_id text not null default 'C',
-      x real not null default 0,
-      y real not null default 0,
-      gold int not null default 0,
-      equipment jsonb not null default '{}'::jsonb,
-      inventory jsonb not null default '{}'::jsonb,
-      quests jsonb not null default '{}'::jsonb,
-      hotbar jsonb not null default '[]'::jsonb,
-      monster_book jsonb not null default '{}'::jsonb,
-      updated_at timestamptz not null default now()
-    );
-  `);
+  try {
+    await pool.query(`
+      create table if not exists players (
+        name text primary key,
+        level int not null default 1,
+        xp int not null default 0,
+        xp_next int not null default 0,
+        atk int not null default 10,
+        speed int not null default 100,
+        hp int not null default 100,
+        max_hp int not null default 100,
+        map_id text not null default 'C',
+        x real not null default 0,
+        y real not null default 0,
+        gold int not null default 0,
+        equipment jsonb not null default '{}'::jsonb,
+        inventory jsonb not null default '{}'::jsonb,
+        quests jsonb not null default '{}'::jsonb,
+        hotbar jsonb not null default '[]'::jsonb,
+        monster_book jsonb not null default '{}'::jsonb,
+        updated_at timestamptz not null default now()
+      );
+    `);
 
-    // Add new columns safely for existing deployments
-  await pool.query(`alter table players add column if not exists hotbar jsonb not null default '[]'::jsonb;`);
+    // Safe migrations for older deployments
+    await pool.query(`alter table players add column if not exists hotbar jsonb not null default '[]'::jsonb;`);
+    await pool.query(`alter table players add column if not exists speed int not null default 100;`);
+    await pool.query(`alter table players add column if not exists xp_next int not null default 0;`);
+    await pool.query(`create index if not exists players_updated_at_idx on players(updated_at);`);
+    await pool.query(`alter table players add column if not exists monster_book jsonb not null default '{}'::jsonb;`);
 
-  // Migration: add speed stat column if table already existed (older deployments)
-  await pool.query(`alter table players add column if not exists speed int not null default 100;`);
-
-
-  // Migration: add xp_next if table already existed (older deployments)
-  await pool.query(`alter table players add column if not exists xp_next int not null default 0;`);
-await pool.query(`create index if not exists players_updated_at_idx on players(updated_at);`);
-
-  // Migration: add monster_book if table already existed
-  await pool.query(`alter table players add column if not exists monster_book jsonb not null default '{}'::jsonb;`);
-
-  console.log("✅ Postgres schema ensured.");
+    postgresHealthy = true;
+    console.log("✅ Postgres schema ensured.");
+  } catch (err) {
+    postgresHealthy = false;
+    console.error("❌ Postgres schema ensure failed:", err?.message || err);
+    // Don't crash; just run without persistence.
+  }
 }
+
 
 // Paste these below ensurePostgresSchema() (or anywhere above wss.on("connection")):
 
 
 async function dbLoadPlayerByName(name) {
-  if (!pool) return null;
-  const { rows } = await pool.query("select * from players where name = $1", [name]);
-  return rows[0] || null;
+  if (!pool || !postgresHealthy) return null;
+  try {
+    const { rows } = await pool.query("select * from players where name = $1", [name]);
+    return rows[0] || null;
+  } catch (err) {
+    console.error("⚠️ Postgres load failed; running without persistence:", err?.message || err);
+    postgresHealthy = false;
+    return null;
+  }
 }
 
 async function dbSavePlayer(p) {
-  if (!pool) return;
+  if (!pool || !postgresHealthy) return;
   if (!p?.name) return;
 
-  await pool.query(
-    `
-    insert into players
-      (name, level, xp, xp_next, atk, speed, hp, max_hp, map_id, x, y, gold, equipment, inventory, quests, hotbar, monster_book, updated_at)
-    values
-      ($1,   $2,    $3, $4,     $5,  $6,    $7, $8,     $9,    $10,$11,$12, $13::jsonb, $14::jsonb, $15::jsonb, $16::jsonb, $17::jsonb, now())
-    on conflict (name) do update set
-      level=excluded.level,
-      xp=excluded.xp,
-      xp_next=excluded.xp_next,
-      atk=excluded.atk,
-      speed=excluded.speed,
-      hp=excluded.hp,
-      max_hp=excluded.max_hp,
-      map_id=excluded.map_id,
-      x=excluded.x,
-      y=excluded.y,
-      gold=excluded.gold,
-      equipment=excluded.equipment,
-      inventory=excluded.inventory,
-      quests=excluded.quests,
-      hotbar=excluded.hotbar,
-      monster_book=excluded.monster_book,
-      updated_at=now()
-`,
-    [
-      p.name,
-      p.level ?? 1,
-      p.xp ?? 0,
-      p.xpNext ?? xpToNext(p.level ?? 1),
-      p.atk ?? 10,
-            p.speed ?? 100,
-      p.hp ?? 100,
-      p.maxHp ?? 100,
-      p.mapId ?? "C",
-      Number.isFinite(p.x) ? p.x : 0,
-      Number.isFinite(p.y) ? p.y : 0,
-      p.gold ?? 0,
-      JSON.stringify(p.equipment || { weapon: null, armor: null, hat: null, accessory: null }),
-      JSON.stringify(p.inventory || createDefaultInventory()),
-      JSON.stringify(p.quests || {}),
-      JSON.stringify(p.hotbar || new Array(6).fill(null)),
-      JSON.stringify(p.monsterBook || {}),
-    ]
-  );
+  try {
+    await pool.query(
+      `
+      insert into players
+        (name, level, xp, xp_next, atk, speed, hp, max_hp, map_id, x, y, gold, equipment, inventory, quests, hotbar, monster_book, updated_at)
+      values
+        ($1,   $2,    $3, $4,     $5,  $6,    $7, $8,     $9,    $10,$11,$12, $13::jsonb, $14::jsonb, $15::jsonb, $16::jsonb, $17::jsonb, now())
+      on conflict (name) do update set
+        level=excluded.level,
+        xp=excluded.xp,
+        xp_next=excluded.xp_next,
+        atk=excluded.atk,
+        speed=excluded.speed,
+        hp=excluded.hp,
+        max_hp=excluded.max_hp,
+        map_id=excluded.map_id,
+        x=excluded.x,
+        y=excluded.y,
+        gold=excluded.gold,
+        equipment=excluded.equipment,
+        inventory=excluded.inventory,
+        quests=excluded.quests,
+        hotbar=excluded.hotbar,
+        monster_book=excluded.monster_book,
+        updated_at=now()
+      `,
+      [
+        p.name,
+        p.level ?? 1,
+        p.xp ?? 0,
+        p.xpNext ?? xpToNext(p.level ?? 1),
+        p.atk ?? 10,
+        p.speed ?? 100,
+        p.hp ?? 100,
+        p.maxHp ?? 100,
+        p.mapId ?? "C",
+        Number.isFinite(p.x) ? p.x : 0,
+        Number.isFinite(p.y) ? p.y : 0,
+        p.gold ?? 0,
+        JSON.stringify(p.equipment || { weapon: null, armor: null, hat: null, accessory: null }),
+        JSON.stringify(p.inventory || createDefaultInventory()),
+        JSON.stringify(p.quests || {}),
+        JSON.stringify(p.hotbar || new Array(6).fill(null)),
+        JSON.stringify(p.monsterBook || {}),
+      ]
+    );
+  } catch (err) {
+    console.error("⚠️ Postgres save failed; running without persistence:", err?.message || err);
+    postgresHealthy = false;
+  }
 }
+
 
 function applyRowToPlayer(p, row) {
   // Keep runtime-only fields (id, inputs, timers) but load the persistent ones
@@ -960,7 +981,7 @@ const ITEMS = {
   orange_jelly: { id: "orange_jelly", name: "Green Jelly", maxStack: 99 },
   pink_jelly: { id: "pink_jelly", name: "Green Jelly", maxStack: 99 },
   purple_jelly: { id: "purple_jelly", name: "Green Jelly", maxStack: 99 },
-  rainbow: { id: "rainbow_jelly", name: "Green Jelly", maxStack: 99 },
+  rainbow_jelly: { id: "rainbow_jelly", name: "Green Jelly", maxStack: 99 },
 
   // consumables
   potion_small: {
