@@ -43,14 +43,26 @@
   // ---- CSS ----
   const style = document.createElement("style");
   style.textContent = `
+
+    /* Prevent the page from scrolling while playing on mobile */
+    html.mc-mobile, body.mc-mobile {
+      height: 100%;
+      overflow: hidden;
+      overscroll-behavior: none;
+    }
+    body.mc-mobile {
+      touch-action: none;
+      -webkit-overflow-scrolling: auto;
+    }
+
     /* Mobile analog stick */
     .mc-touch-zone {
-      position: absolute;
+            position: fixed;
       left: 0;
       top: 0;
-      width: 50%;
-      height: 100%;
-      z-index: 50;
+      width: 50vw;
+      height: 100vh;
+      z-index: 9999;
       background: transparent;
       touch-action: none;
       -webkit-user-select: none;
