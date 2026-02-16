@@ -1,21 +1,16 @@
 /*
-  mobile_controls.js (iPhone-friendly, no-distortion + robust joystick)
-
-  What this does (mobile only):
-  - Detects touch/mobile-ish devices.
-  - Prevents page scrolling/panning (so joystick drags don't move the page).
-  - Full-screen game presentation WITHOUT stretching.
-      * Landscape: letterbox "contain" (no crop, no distortion)
-      * Portrait: "cover-ish" (bigger, may crop a bit left/right) + rotate hint
-  - Virtual joystick on left side (invisible until touched).
-  - Emits Arrow key events (so your existing keyboard movement works unchanged).
-
-  Put this file in: /public/mobile_controls.js
+  MobileControls (Landscape + Zoom/Cover + No Ghosting)
+  - Detects mobile-ish devices
+  - Forces a landscape-only UX (shows rotate overlay in portrait)
+  - Adds a left-side analog joystick that's invisible until touch
+  - Prevents page scrolling while playing
+  - Scales the game's canvas to "cover" the viewport (no letterboxing); crops edges if needed
+  - Uses a single joystick instance (no accumulation/ghosting)
 */
-
 (() => {
   "use strict";
 
+  // ---------- mobile detection ----------
   function isProbablyMobile() {
     const hasTouch =
       (navigator.maxTouchPoints && navigator.maxTouchPoints > 0) ||
@@ -35,324 +30,298 @@
 
   if (!isProbablyMobile()) return;
 
-  // ---------- Mobile-only CSS + scroll lock ----------
-  document.documentElement.classList.add("mc-mobile");
-  document.body.classList.add("mc-mobile");
+  // ---------- global scroll/selection guards ----------
+  // Make the page behave like a full-screen game surface.
+  const html = document.documentElement;
+  const body = document.body;
 
+  function setGlobalStyles() {
+    html.style.height = "100%";
+    body.style.height = "100%";
+    body.style.margin = "0";
+    body.style.overflow = "hidden";
+    body.style.touchAction = "none"; // important: stops browser panning/zoom gestures
+    body.style.background = "#000";
+    body.style.userSelect = "none";
+    body.style.webkitUserSelect = "none";
+    body.style.webkitTouchCallout = "none";
+  }
+  setGlobalStyles();
+
+  // ---------- helper: find your canvas ----------
+  function getCanvas() {
+    // Your project uses <canvas id="c">, but fall back to the first canvas if renamed.
+    return document.getElementById("c") || document.querySelector("canvas");
+  }
+
+  // ---------- rotate overlay (portrait blocker) ----------
+  const rotateOverlay = document.createElement("div");
+  rotateOverlay.className = "mc-rotate-overlay";
+  rotateOverlay.innerHTML = `
+    <div class="mc-rotate-card">
+      <div class="mc-rotate-title">Rotate your phone</div>
+      <div class="mc-rotate-sub">This game is landscape-only.</div>
+    </div>
+  `;
+  document.body.appendChild(rotateOverlay);
+
+  // ---------- joystick touch zone + joystick UI (single instance) ----------
+  const zone = document.createElement("div");
+  zone.className = "mc-touch-zone";
+
+  const joy = document.createElement("div");
+  joy.className = "mc-joy";
+  joy.innerHTML = `<div class="mc-joy-knob"></div>`;
+  const knob = joy.querySelector(".mc-joy-knob");
+
+  document.body.appendChild(zone);
+  document.body.appendChild(joy);
+
+  // ---------- styles ----------
   const style = document.createElement("style");
   style.textContent = `
-    html.mc-mobile, body.mc-mobile {
-      margin: 0;
-      padding: 0;
-      height: 100%;
-      width: 100%;
-      overflow: hidden;
-      overscroll-behavior: none;
-      touch-action: none;
-      -webkit-overflow-scrolling: auto;
-      background: #000;
-    }
-
-    /* Hide desktop header text above the canvas on mobile */
-    body.mc-mobile > h1,
-    body.mc-mobile > p { display: none !important; }
-
-    /* Fullscreen wrap */
-    #gameWrap {
-      position: fixed !important;
-      inset: 0 !important;
-      display: flex !important;
-      align-items: center !important;
-      justify-content: center !important;
-      background: #000 !important;
-    }
-
-    /* Canvas centered; size set by JS */
-    #c { display: block; margin: 0 auto; }
-
-    /* Joystick visuals */
-    .mc-joy-base{
-      position: fixed;
-      width: 140px;
-      height: 140px;
-      border-radius: 999px;
-      border: 2px solid rgba(255,255,255,0.30);
-      background: rgba(255,255,255,0.06);
-      transform: translate(-50%, -50%);
-      z-index: 2147483647;
-      pointer-events: none;
-      display: none;
-    }
-    .mc-joy-knob{
-      position: absolute;
-      left: 50%;
-      top: 50%;
-      width: 58px;
-      height: 58px;
-      border-radius: 999px;
-      border: 2px solid rgba(255,255,255,0.35);
-      background: rgba(255,255,255,0.14);
-      transform: translate(-50%, -50%);
-    }
-
-    /* Invisible touch zone (left side) */
     .mc-touch-zone{
       position: fixed;
       left: 0;
       top: 0;
       width: 50vw;
       height: 100vh;
-      z-index: 2147483646;
-      background: rgba(0,0,0,0);
+      z-index: 2147483000;
       touch-action: none;
+      background: rgba(0,0,0,0); /* invisible */
+    }
+    .mc-joy{
+      position: fixed;
+      left: -9999px;
+      top: -9999px;
+      width: 140px;
+      height: 140px;
+      margin: 0;
+      transform: translate(-50%, -50%);
+      border-radius: 999px;
+      background: rgba(255,255,255,0.12);
+      border: 2px solid rgba(255,255,255,0.18);
+      z-index: 2147483001;
+      display: none;
+      touch-action: none;
+      pointer-events: none; /* purely visual */
+      box-shadow: 0 10px 28px rgba(0,0,0,0.35);
+      backdrop-filter: blur(2px);
+    }
+    .mc-joy .mc-joy-knob{
+      position: absolute;
+      left: 50%;
+      top: 50%;
+      width: 62px;
+      height: 62px;
+      transform: translate(-50%, -50%);
+      border-radius: 999px;
+      background: rgba(255,255,255,0.22);
+      border: 2px solid rgba(255,255,255,0.22);
+      box-shadow: 0 6px 18px rgba(0,0,0,0.25);
     }
 
-    /* Rotate hint */
-    .mc-rotate-hint{
+    .mc-rotate-overlay{
       position: fixed;
-      left: 50%;
-      top: 12px;
-      transform: translateX(-50%);
-      padding: 8px 12px;
-      border-radius: 10px;
-      background: rgba(0,0,0,0.55);
-      border: 1px solid rgba(255,255,255,0.18);
-      color: rgba(255,255,255,0.95);
-      font: 14px/1.2 system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
-      z-index: 2147483647;
-      pointer-events: none;
+      inset: 0;
+      z-index: 2147483500;
       display: none;
+      align-items: center;
+      justify-content: center;
+      background: rgba(0,0,0,0.75);
+      padding: 24px;
+      text-align: center;
+    }
+    .mc-rotate-card{
+      max-width: 420px;
+      border-radius: 16px;
+      padding: 18px 16px;
+      background: rgba(20,20,20,0.90);
+      border: 1px solid rgba(255,255,255,0.14);
+      color: rgba(255,255,255,0.92);
+      box-shadow: 0 16px 40px rgba(0,0,0,0.5);
+    }
+    .mc-rotate-title{
+      font: 700 20px/1.2 system-ui, -apple-system, Segoe UI, Roboto, Arial;
+      margin-bottom: 6px;
+    }
+    .mc-rotate-sub{
+      font: 500 14px/1.3 system-ui, -apple-system, Segoe UI, Roboto, Arial;
+      opacity: 0.9;
     }
   `;
   document.head.appendChild(style);
 
-  // iOS-safe scroll lock (prevents "rubber band" + page panning)
-  const scrollY = window.scrollY || 0;
-  document.body.style.position = "fixed";
-  document.body.style.top = `-${scrollY}px`;
-  document.body.style.left = "0";
-  document.body.style.right = "0";
-  document.body.style.width = "100%";
-
-  // ---------- Helpers ----------
-  function getCanvas() { return document.getElementById("c"); }
-  function getWrap() { return document.getElementById("gameWrap"); }
-
-  function viewportSize() {
-    const vw = (window.visualViewport && window.visualViewport.width) ? window.visualViewport.width : window.innerWidth;
-    const vh = (window.visualViewport && window.visualViewport.height) ? window.visualViewport.height : window.innerHeight;
-    return { vw, vh };
-  }
-
-  // Fit the canvas without distortion:
-  // - Landscape: contain (letterbox)
-  // - Portrait: cover-ish (bigger, may crop a bit left/right)
-  function fitCanvas() {
+  // ---------- canvas cover scaling (no black bars) ----------
+  function applyCanvasCover() {
     const c = getCanvas();
-    const wrap = getWrap();
-    if (!c || !wrap) return;
+    if (!c) return;
 
-    const nativeW = c.width || 800;
-    const nativeH = c.height || 600;
-    const { vw, vh } = viewportSize();
+    // base logical size (uses intrinsic canvas size)
+    const baseW = c.width || 800;
+    const baseH = c.height || 600;
 
-    const isPortrait = vh > vw * 1.05;
+    // Use visual viewport sizes
+    const vw = window.innerWidth;
+    const vh = window.innerHeight;
 
-    const scaleContain = Math.min(vw / nativeW, vh / nativeH);
-    const scaleCover = Math.max(vw / nativeW, vh / nativeH);
+    // Scale to cover: max so there are no bars; will crop
+    const scale = Math.max(vw / baseW, vh / baseH);
 
-    const scale = isPortrait ? scaleCover : scaleContain;
-
-    const cssW = Math.floor(nativeW * scale);
-    const cssH = Math.floor(nativeH * scale);
-
-    c.style.width = `${cssW}px`;
-    c.style.height = `${cssH}px`;
+    c.style.position = "fixed";
+    c.style.left = "50%";
+    c.style.top = "50%";
+    c.style.width = `${Math.ceil(baseW * scale)}px`;
+    c.style.height = `${Math.ceil(baseH * scale)}px`;
+    c.style.transform = "translate(-50%, -50%)";
+    c.style.imageRendering = "pixelated"; // keeps pixel art crisp when scaled
+    c.style.zIndex = "0";
   }
 
-  function showRotateHintIfNeeded() {
-    const { vw, vh } = viewportSize();
-    const hint = document.getElementById("mcRotateHint");
-    if (!hint) return;
-    const isPortrait = vh > vw * 1.05;
-    hint.style.display = isPortrait ? "block" : "none";
-  }
+  // ---------- portrait/landscape gating ----------
+  let landscapeEnabled = true;
 
-  // Keep things updated when address bar shows/hides or orientation changes.
-  function refitAll() {
-    fitCanvas();
-    showRotateHintIfNeeded();
-  }
-  window.addEventListener("resize", () => { refitAll(); }, { passive: true });
-  window.addEventListener("orientationchange", () => { setTimeout(refitAll, 250); }, { passive: true });
-  if (window.visualViewport) {
-    window.visualViewport.addEventListener("resize", () => { refitAll(); }, { passive: true });
-    window.visualViewport.addEventListener("scroll", () => { refitAll(); }, { passive: true });
-  }
-  window.addEventListener("load", () => { refitAll(); }, { once: true });
-
-  // Optional hint
-  const rotateHint = document.createElement("div");
-  rotateHint.id = "mcRotateHint";
-  rotateHint.className = "mc-rotate-hint";
-  rotateHint.textContent = "Rotate your phone for a bigger view";
-  document.body.appendChild(rotateHint);
-
-  // ---------- Virtual joystick (robust: one element, no accumulation) ----------
-  const deadZone = 18;
-  const maxRadius = 48;
-
-  // One stick element reused forever (prevents stacking even if an "end" is missed)
-  const baseEl = document.createElement("div");
-  baseEl.className = "mc-joy-base";
-  const knobEl = document.createElement("div");
-  knobEl.className = "mc-joy-knob";
-  baseEl.appendChild(knobEl);
-  document.body.appendChild(baseEl);
-
-  function setStickVisible(visible) {
-    baseEl.style.display = visible ? "block" : "none";
-    if (!visible) {
-      knobEl.style.transform = "translate(-50%, -50%)";
+  function setLandscapeEnabled(on) {
+    landscapeEnabled = on;
+    zone.style.pointerEvents = on ? "auto" : "none";
+    if (!on) {
+      // stop movement + hide joystick when portrait
+      endJoystick();
+      rotateOverlay.style.display = "flex";
+    } else {
+      rotateOverlay.style.display = "none";
     }
   }
 
-  const touchZone = document.createElement("div");
-  touchZone.className = "mc-touch-zone";
-  document.body.appendChild(touchZone);
+  function updateOrientationState() {
+    const portrait = window.innerHeight > window.innerWidth;
+    setLandscapeEnabled(!portrait);
+    // Only scale canvas when landscape (in portrait we show overlay)
+    if (!portrait) applyCanvasCover();
+  }
 
+  // ---------- key simulation (same contract as keyboard movement) ----------
+  const KEYMAP = {
+    up: "ArrowUp",
+    down: "ArrowDown",
+    left: "ArrowLeft",
+    right: "ArrowRight",
+  };
+
+  const pressed = new Set();
+  function dispatchKey(type, key) {
+    // Many games listen on window; dispatch on window to match
+    const ev = new KeyboardEvent(type, { key, bubbles: true });
+    window.dispatchEvent(ev);
+  }
+  function setKey(dir, down) {
+    const key = KEYMAP[dir];
+    if (!key) return;
+    if (down) {
+      if (pressed.has(key)) return;
+      pressed.add(key);
+      dispatchKey("keydown", key);
+    } else {
+      if (!pressed.has(key)) return;
+      pressed.delete(key);
+      dispatchKey("keyup", key);
+    }
+  }
+  function clearKeys() {
+    for (const key of Array.from(pressed)) {
+      pressed.delete(key);
+      dispatchKey("keyup", key);
+    }
+  }
+
+  // ---------- joystick logic ----------
   let active = false;
   let startX = 0, startY = 0;
-  let held = { up:false, down:false, left:false, right:false };
-  let activePointerId = null;
+  const radius = 60;     // outer radius (px)
+  const deadzone = 10;   // px
 
-  function dispatchKey(type, key) {
-    window.dispatchEvent(new KeyboardEvent(type, { key, bubbles: true }));
+  function showJoystick(x, y) {
+    joy.style.left = `${x}px`;
+    joy.style.top = `${y}px`;
+    joy.style.display = "block";
+    knob.style.transform = "translate(-50%, -50%)";
   }
 
-  function setPressed(next) {
-    const map = [
-      ["up", "ArrowUp"],
-      ["down", "ArrowDown"],
-      ["left", "ArrowLeft"],
-      ["right", "ArrowRight"],
-    ];
-    for (const [dir, key] of map) {
-      if (held[dir] !== next[dir]) {
-        held[dir] = next[dir];
-        dispatchKey(next[dir] ? "keydown" : "keyup", key);
-      }
-    }
-  }
-
-  function beginAt(x, y) {
-    active = true;
-    startX = x; startY = y;
-    baseEl.style.left = `${x}px`;
-    baseEl.style.top = `${y}px`;
-    setStickVisible(true);
-    setPressed({up:false,down:false,left:false,right:false});
-  }
-
-  function moveTo(x, y) {
-    if (!active) return;
-
+  function moveJoystick(x, y) {
     const dx = x - startX;
     const dy = y - startY;
 
     const dist = Math.hypot(dx, dy);
-    const clamped = Math.min(dist, maxRadius);
-    const nx = dist ? dx / dist : 0;
-    const ny = dist ? dy / dist : 0;
+    const clamped = Math.min(dist, radius);
+    const ang = Math.atan2(dy, dx);
 
-    const kx = nx * clamped;
-    const ky = ny * clamped;
+    const outX = Math.cos(ang) * clamped;
+    const outY = Math.sin(ang) * clamped;
 
-    knobEl.style.transform = `translate(calc(-50% + ${kx}px), calc(-50% + ${ky}px))`;
+    knob.style.transform = `translate(calc(-50% + ${outX}px), calc(-50% + ${outY}px))`;
 
-    const next = { up:false, down:false, left:false, right:false };
-    if (dist >= deadZone) {
-      if (Math.abs(dx) > Math.abs(dy)) {
-        next.left = dx < -deadZone;
-        next.right = dx > deadZone;
-      } else {
-        next.up = dy < -deadZone;
-        next.down = dy > deadZone;
-      }
-    }
-    setPressed(next);
+    // Convert to 4-way keys (keep your current movement model)
+    const ax = Math.abs(outX);
+    const ay = Math.abs(outY);
+
+    const wantLeft = outX < -deadzone && ax >= ay;
+    const wantRight = outX > deadzone && ax >= ay;
+    const wantUp = outY < -deadzone && ay > ax;
+    const wantDown = outY > deadzone && ay > ax;
+
+    setKey("left", wantLeft);
+    setKey("right", wantRight);
+    setKey("up", wantUp);
+    setKey("down", wantDown);
+
+    if (!wantLeft) setKey("left", false);
+    if (!wantRight) setKey("right", false);
+    if (!wantUp) setKey("up", false);
+    if (!wantDown) setKey("down", false);
   }
 
-  function end() {
-    if (!active) return;
+  function endJoystick() {
     active = false;
-    activePointerId = null;
-    setStickVisible(false);
-    setPressed({up:false,down:false,left:false,right:false});
+    joy.style.display = "none";
+    clearKeys();
   }
 
-  // Extra safety: if something goes weird, releasing anywhere ends movement.
-  window.addEventListener("blur", end);
-  window.addEventListener("visibilitychange", () => { if (document.hidden) end(); });
-
-  // Pointer Events (best on modern iOS/Android)
-  touchZone.addEventListener("pointerdown", (e) => {
-    if (e.pointerType === "mouse") return;
+  // Use Pointer Events (best on iOS 13+)
+  zone.addEventListener("pointerdown", (e) => {
+    if (!landscapeEnabled) return;
     e.preventDefault();
-    activePointerId = e.pointerId;
-    // Capture so we still get pointerup even if finger moves outside zone
-    if (touchZone.setPointerCapture) {
-      try { touchZone.setPointerCapture(activePointerId); } catch {}
-    }
-    beginAt(e.clientX, e.clientY);
+    zone.setPointerCapture?.(e.pointerId);
+
+    active = true;
+    startX = e.clientX;
+    startY = e.clientY;
+    showJoystick(startX, startY);
+    moveJoystick(e.clientX, e.clientY);
   }, { passive: false });
 
-  touchZone.addEventListener("pointermove", (e) => {
-    if (e.pointerType === "mouse") return;
-    if (!active || e.pointerId !== activePointerId) return;
+  zone.addEventListener("pointermove", (e) => {
+    if (!active) return;
     e.preventDefault();
-    moveTo(e.clientX, e.clientY);
+    moveJoystick(e.clientX, e.clientY);
   }, { passive: false });
 
-  touchZone.addEventListener("pointerup", (e) => {
-    if (e.pointerType === "mouse") return;
-    if (e.pointerId !== activePointerId) return;
+  function onPointerEnd(e) {
+    if (!active) return;
     e.preventDefault();
-    end();
-  }, { passive: false });
+    active = false;
+    endJoystick();
+  }
+  zone.addEventListener("pointerup", onPointerEnd, { passive: false });
+  zone.addEventListener("pointercancel", onPointerEnd, { passive: false });
+  zone.addEventListener("lostpointercapture", () => { if (active) endJoystick(); });
 
-  touchZone.addEventListener("pointercancel", (e) => {
-    if (e.pointerType === "mouse") return;
-    if (e.pointerId !== activePointerId) return;
-    e.preventDefault();
-    end();
-  }, { passive: false });
+  // Safety: if the page loses focus
+  window.addEventListener("blur", () => endJoystick());
 
-  // Touch Events fallback (older browsers)
-  touchZone.addEventListener("touchstart", (e) => {
-    if (!e.touches || e.touches.length === 0) return;
-    e.preventDefault();
-    const t = e.touches[0];
-    beginAt(t.clientX, t.clientY);
-  }, { passive: false });
+  // ---------- orientation + resize handlers ----------
+  window.addEventListener("resize", updateOrientationState);
+  window.addEventListener("orientationchange", updateOrientationState);
 
-  touchZone.addEventListener("touchmove", (e) => {
-    if (!active || !e.touches || e.touches.length === 0) return;
-    e.preventDefault();
-    const t = e.touches[0];
-    moveTo(t.clientX, t.clientY);
-  }, { passive: false });
-
-  touchZone.addEventListener("touchend", (e) => {
-    e.preventDefault();
-    end();
-  }, { passive: false });
-
-  touchZone.addEventListener("touchcancel", (e) => {
-    e.preventDefault();
-    end();
-  }, { passive: false });
-
-  // Tiny nudge (sometimes helps on non-standalone Android)
-  setTimeout(() => { window.scrollTo(0, 1); }, 200);
+  // Initial apply
+  updateOrientationState();
 })();

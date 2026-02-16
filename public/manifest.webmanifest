@@ -1,6 +1,6 @@
 {
-  "name": "Mini MMO",
-  "short_name": "MiniMMO",
+  "name": "My Game",
+  "short_name": "MyGame",
   "start_url": "/",
   "display": "standalone",
   "background_color": "#000000",
