@@ -120,37 +120,44 @@
     return vp.w >= vp.h;
   }
 
-  // Keep internal canvas size stable (prevents HUD scaling issues),
-  // but visually scale/center it with a uniform 'contain' scale.
+  // ===== Mobile zoom (camera-safe) =====
+  // Keep the GAME'S canvas coordinate system smaller on mobile, so the camera
+  // uses a smaller view size (zoomed-in world) rather than CSS-cropping.
   const BASE_W = 800;
   const BASE_H = 600;
+
+  // Requested zoom: 1.5x (3/2)
+  const MOBILE_ZOOM = 3 / 2; // 1.5
+
+  // Internal canvas size on mobile (this is what your camera math uses).
+  // Note: width isn't an integer for 800/1.5, so we round to the closest int.
+  // Height is exactly 400.
+  const MOBILE_W = Math.round(BASE_W / MOBILE_ZOOM); // ~533
+  const MOBILE_H = Math.round(BASE_H / MOBILE_ZOOM); // 400
 
   function resizeCanvasInternal() {
     const ctx = ensureWrap();
     if (!ctx) return;
     const { canvas } = ctx;
 
-    // Force internal resolution back to the game's expected 800x600.
-    if (canvas.width !== BASE_W) canvas.width = BASE_W;
-    if (canvas.height !== BASE_H) canvas.height = BASE_H;
+    const vp = getVP();
 
-	const vp = getVP();
+    // Use smaller internal size on mobile landscape so camera follows correctly.
+    const internalW = MOBILE_W;
+    const internalH = MOBILE_H;
 
-	// Fit-to-screen scale (what you already had)
-	const fitScale = Math.min(vp.w / BASE_W, vp.h / BASE_H);
+    // Force internal resolution (THIS is what the camera uses).
+    if (canvas.width !== internalW) canvas.width = internalW;
+    if (canvas.height !== internalH) canvas.height = internalH;
 
-	// Zoom in (fewer tiles visible)
-	const MOBILE_ZOOM = 3 / 2; // 1.333...  (10.5x12.5 -> 7.875x9.375)
-
-	const scale = fitScale * MOBILE_ZOOM;
-
-	const dispW = Math.round(BASE_W * scale);
-	const dispH = Math.round(BASE_H * scale);
-
+    // Scale the smaller canvas up to fit the screen (uniform scale, no distortion).
+    const scale = Math.min(vp.w / internalW, vp.h / internalH);
+    const dispW = Math.round(internalW * scale);
+    const dispH = Math.round(internalH * scale);
 
     // Centered via CSS (left/top 50% + translate). Just set size.
-    canvas.style.width = dispW + 'px';
-    canvas.style.height = dispH + 'px';
+    canvas.style.width = dispW + "px";
+    canvas.style.height = dispH + "px";
   }
 
   // Run resize multiple times to "win" races with game init flows.
@@ -161,7 +168,6 @@
         if (isLandscapeNow()) resizeCanvasInternal();
       }, t);
     }
-
   }
 
   // ===== Landscape lock overlay =====
@@ -207,8 +213,7 @@
   const DEADZONE = 10;
 
   let active = false;
-  let startX = 0,
-    startY = 0;
+  let startX = 0, startY = 0;
   let currentDirs = new Set();
 
   function dispatchKey(type, key) {
@@ -249,9 +254,7 @@
     startY = y;
     showJoystick(x, y);
     if (typeof pointerId === "number" && touchZone.setPointerCapture) {
-      try {
-        touchZone.setPointerCapture(pointerId);
-      } catch (_) {}
+      try { touchZone.setPointerCapture(pointerId); } catch (_) {}
     }
   }
 
@@ -282,9 +285,7 @@
     stopAll();
     hideJoystick();
     if (typeof pointerId === "number" && touchZone.releasePointerCapture) {
-      try {
-        touchZone.releasePointerCapture(pointerId);
-      } catch (_) {}
+      try { touchZone.releasePointerCapture(pointerId); } catch (_) {}
     }
   }
 
