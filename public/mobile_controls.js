@@ -73,9 +73,6 @@
       overscroll-behavior: none;
       touch-action: manipulation;
       background: #000;
-      -webkit-touch-callout: none;
-      -webkit-user-select: none;
-      user-select: none;
     }
 
     /* Hide simple desktop text headers if present */
@@ -93,10 +90,6 @@
       box-sizing: border-box;
       padding: var(--mc-safe-top) var(--mc-safe-right) var(--mc-safe-bottom) var(--mc-safe-left);
       z-index: 0;
-    
-      -webkit-user-select: none;
-      user-select: none;
-      -webkit-touch-callout: none;
     }
 
     #c {
@@ -121,9 +114,9 @@
       position: fixed;
       left: 0;
       top: 0;
-      width: 30vw;
+      width: 20vw;
       height: 100vh;
-      z-index: 6;
+      z-index: 2147483000;
       touch-action: none;
       background: transparent;
     }
@@ -144,20 +137,7 @@
       line-height: 1.35;
     }
     .mc-rotate-overlay strong { font-size: 22px; display:block; margin-bottom: 8px; }
-  
-    .hud-btn, #mainMenu { z-index: 1000 !important; }
-
-    .mc-action-zone {
-      position: fixed;
-      right: 0;
-      top: calc(var(--mc-safe-top) + 70px);
-      height: calc(100vh - (var(--mc-safe-top) + 70px));
-      width: 25vw;
-      z-index: 5; /* above canvas (1), below hud buttons (1000) */
-      touch-action: none;
-      background: transparent;
-    }
-`;
+  `;
   document.head.appendChild(style);
 
   // Ensure wrapper exists and owns the canvas.
@@ -258,6 +238,43 @@
 
     canvas.style.width = dispW + "px";
     canvas.style.height = dispH + "px";
+
+    // ===== Mobile-only HUD defaults (canvas-space) =====
+    // The main game script reads these localStorage keys during init.
+    // Because this file loads BEFORE the inline game script, this affects mobile only.
+    try {
+      // Match index.html constants
+      const HUD_POS_STORAGE_KEY = "uiHudPos_v1";
+      const HOTBAR_POS_STORAGE_KEY = "uiHotbarPos_v1";
+
+      // Hotbar layout constants (must match getHotbarLayout() in index.html)
+      const HOTBAR_SIZE = 6;
+      const HOTBAR_BOX = 44;
+      const HOTBAR_GAP = 6;
+      const hotbarTotalW = HOTBAR_SIZE * HOTBAR_BOX + (HOTBAR_SIZE - 1) * HOTBAR_GAP;
+
+      // HUD layout constants (must match getHudLayout() in index.html)
+      const HUD_W = 170;
+      const HUD_HP_H = 14;
+      const HUD_XP_H = 7;
+      const HUD_PAD = 4;
+
+      // Hotbar: flush bottom-right
+      const hotbarX = Math.round(canvas.width - hotbarTotalW);
+      const hotbarY = Math.round(canvas.height - HOTBAR_BOX);
+
+      // HUD: bottom-center, flush bottom edge
+      // Background rect is drawn at (x-4,y-4) with height (hpH+xpH+pad*2).
+      // To make the background flush with the bottom of the canvas:
+      const hudH = HUD_HP_H + HUD_XP_H + HUD_PAD * 2;
+      const hudX = Math.round(canvas.width / 2 - HUD_W / 2);
+      const hudY = Math.round(canvas.height - hudH + 4);
+
+      localStorage.setItem(HOTBAR_POS_STORAGE_KEY, JSON.stringify({ x: hotbarX, y: hotbarY }));
+      localStorage.setItem(HUD_POS_STORAGE_KEY, JSON.stringify({ x: hudX, y: hudY }));
+    } catch (_) {
+      // ignore storage failures (private mode, etc.)
+    }
 
     elevateHamburger();
   }
