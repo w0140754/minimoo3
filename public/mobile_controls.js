@@ -40,7 +40,7 @@
       width: 100%;
       overflow: hidden;
       overscroll-behavior: none;
-      touch-action: none;
+      touch-action: manipulation;
       background: #000;
     }
 
@@ -60,9 +60,9 @@
 
     #c {
       position: absolute !important;
-      inset: 0 !important;
-      width: 100% !important;
-      height: 100% !important;
+      left: 50% !important;
+      top: 50% !important;
+      transform: translate(-50%, -50%);
       display: block !important;
       image-rendering: pixelated;
       touch-action: none;
@@ -120,19 +120,28 @@
     return vp.w >= vp.h;
   }
 
-  // Resize internal canvas to match viewport aspect ratio, keeping internal height = 600.
+  // Keep internal canvas size stable (prevents HUD scaling issues),
+  // but visually scale/center it with a uniform 'contain' scale.
+  const BASE_W = 800;
+  const BASE_H = 600;
+
   function resizeCanvasInternal() {
     const ctx = ensureWrap();
     if (!ctx) return;
     const { canvas } = ctx;
 
-    const vp = getVP();
-    const baseH = 600;
-    const newW = Math.max(320, Math.min(2400, Math.round(baseH * (vp.w / vp.h))));
+    // Force internal resolution back to the game's expected 800x600.
+    if (canvas.width !== BASE_W) canvas.width = BASE_W;
+    if (canvas.height !== BASE_H) canvas.height = BASE_H;
 
-    // If the game sets width/height after we do, we'll re-apply via observers.
-    if (canvas.height !== baseH) canvas.height = baseH;
-    if (canvas.width !== newW) canvas.width = newW;
+    const vp = getVP();
+    const scale = Math.min(vp.w / BASE_W, vp.h / BASE_H);
+    const dispW = Math.round(BASE_W * scale);
+    const dispH = Math.round(BASE_H * scale);
+
+    // Centered via CSS (left/top 50% + translate). Just set size.
+    canvas.style.width = dispW + 'px';
+    canvas.style.height = dispH + 'px';
   }
 
   // Run resize multiple times to "win" races with game init flows.
@@ -143,6 +152,7 @@
         if (isLandscapeNow()) resizeCanvasInternal();
       }, t);
     }
+
   }
 
   // ===== Landscape lock overlay =====
