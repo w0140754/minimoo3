@@ -3333,10 +3333,25 @@ function setMoveKey(e, down) {
   sendInput();
 }
 
-function getMouseWorldFromEvent(e) {
+
+
+// Map a mouse/pointer/touch event to *canvas pixel* coordinates, even when the canvas is CSS-scaled.
+function getMouseCanvasFromEvent(e) {
   const rect = canvas.getBoundingClientRect();
-  const mx = e.clientX - rect.left;
-  const my = e.clientY - rect.top;
+  const src = (e.touches && e.touches[0]) ? e.touches[0]
+            : (e.changedTouches && e.changedTouches[0]) ? e.changedTouches[0]
+            : e;
+  const clientX = src.clientX;
+  const clientY = src.clientY;
+  const scaleX = canvas.width  / rect.width;
+  const scaleY = canvas.height / rect.height;
+  const mx = (clientX - rect.left) * scaleX;
+  const my = (clientY - rect.top)  * scaleY;
+  return { rect, mx, my, scaleX, scaleY };
+}
+
+function getMouseWorldFromEvent(e) {
+  const { mx, my } = getMouseCanvasFromEvent(e);
   return { mx, my, wx: camX + mx, wy: camY + my };
 }
 
@@ -3909,9 +3924,9 @@ canvas.addEventListener("contextmenu", (e) => {
 
 canvas.addEventListener("mousemove", (e) => {
   if (!editorOpen) return;
-  const rect = canvas.getBoundingClientRect();
-  editorMouseX = e.clientX - rect.left;
-  editorMouseY = e.clientY - rect.top;
+  const { mx, my } = getMouseCanvasFromEvent(e);
+  editorMouseX = mx;
+  editorMouseY = my;
   editorMouseHas = true;
 });
 
@@ -3927,10 +3942,8 @@ canvas.addEventListener("mousedown", (e) => {
 
   // If inventory is open and click is inside it, let inventory handle it.
   if (inventoryOpen && invUI) {
-    const rect = canvas.getBoundingClientRect();
-    const mx = e.clientX - rect.left;
-    const my = e.clientY - rect.top;
-    // treat inventory window as a block region
+    const { mx, my } = getMouseCanvasFromEvent(e);
+// treat inventory window as a block region
     if (mx >= invWinX && mx <= invWinX + invWinW && my >= invWinY && my <= invWinY + invWinH) {
       return; // let inventory mousedown run
     }
@@ -3939,11 +3952,8 @@ canvas.addEventListener("mousedown", (e) => {
   e.preventDefault();
   e.stopImmediatePropagation();
 
-  const rect = canvas.getBoundingClientRect();
-  const mx = e.clientX - rect.left;
-  const my = e.clientY - rect.top;
-
-  if (!map) return;
+  const { mx, my } = getMouseCanvasFromEvent(e);
+if (!map) return;
   const tx = Math.floor((camX + mx) / TILE_SIZE);
   const ty = Math.floor((camY + my) / TILE_SIZE);
   if (tx < 0 || ty < 0 || ty >= map.length || tx >= map[0].length) return;
@@ -3973,11 +3983,8 @@ canvas.addEventListener("mousedown", (e) => {
   e.preventDefault();
   e.stopImmediatePropagation();
 
-  const rect = canvas.getBoundingClientRect();
-  const mx = e.clientX - rect.left;
-  const my = e.clientY - rect.top;
-
-  // If a drop confirmation dialog is open, handle it first.
+  const { mx, my } = getMouseCanvasFromEvent(e);
+// If a drop confirmation dialog is open, handle it first.
   if (dropConfirm) {
     const layout = getDropConfirmLayout();
     if (layout) {
@@ -4119,11 +4126,8 @@ canvas.addEventListener("mouseup", (e) => {
   // If we never pressed down inside a slot and we're not dragging, ignore.
   if (invPointerDownSlot == null && !draggingInv) return;
 
-  const rect = canvas.getBoundingClientRect();
-  const mx = e.clientX - rect.left;
-  const my = e.clientY - rect.top;
-
-  const me = (typeof worldPlayers !== "undefined" && typeof myId !== "undefined") ? worldPlayers?.[myId] : null;
+  const { mx, my } = getMouseCanvasFromEvent(e);
+const me = (typeof worldPlayers !== "undefined" && typeof myId !== "undefined") ? worldPlayers?.[myId] : null;
   const slots = me?.inventory?.slots || [];
 
   // If we are currently dragging, try to move, bind, or drop the item.
@@ -4241,11 +4245,8 @@ canvas.addEventListener("mousedown", (e) => {
   e.preventDefault();
   e.stopImmediatePropagation();
 
-  const rect = canvas.getBoundingClientRect();
-  const mx = e.clientX - rect.left;
-  const my = e.clientY - rect.top;
-
-  // close button
+  const { mx, my } = getMouseCanvasFromEvent(e);
+// close button
   const c = skillsUI.close;
   if (c && mx >= c.x && mx <= c.x + c.w && my >= c.y && my <= c.y + c.h) {
     skillsOpen = false;
@@ -4290,22 +4291,16 @@ canvas.addEventListener("mousedown", (e) => {
 
 canvas.addEventListener("mousemove", (e) => {
   if (!skillsOpen || !skillsDragging) return;
-  const rect = canvas.getBoundingClientRect();
-  const mx = e.clientX - rect.left;
-  const my = e.clientY - rect.top;
-
-  skillsWinX = Math.round(mx - skillsDragOffX);
+  const { mx, my } = getMouseCanvasFromEvent(e);
+skillsWinX = Math.round(mx - skillsDragOffX);
   skillsWinY = Math.round(my - skillsDragOffY);
 });
 
 
 window.addEventListener("mousemove", (e) => {
   if (!inventoryOpen || !invDragging) return;
-  const rect = canvas.getBoundingClientRect();
-  const mx = e.clientX - rect.left;
-  const my = e.clientY - rect.top;
-
-  invWinX = Math.round(mx - invDragOffX);
+  const { mx, my } = getMouseCanvasFromEvent(e);
+invWinX = Math.round(mx - invDragOffX);
   invWinY = Math.round(my - invDragOffY);
 
   // keep on-screen
@@ -4322,11 +4317,8 @@ canvas.addEventListener("mousedown", (e) => {
   e.preventDefault();
   e.stopImmediatePropagation();
 
-  const rect = canvas.getBoundingClientRect();
-  const mx = e.clientX - rect.left;
-  const my = e.clientY - rect.top;
-
-  // close button
+  const { mx, my } = getMouseCanvasFromEvent(e);
+// close button
   if (bookCloseRect && mx >= bookCloseRect.x && mx <= bookCloseRect.x + bookCloseRect.w && my >= bookCloseRect.y && my <= bookCloseRect.y + bookCloseRect.h) {
     monsterBookOpen = false;
     bookDragging = false;
@@ -4357,10 +4349,8 @@ canvas.addEventListener("mousedown", (e) => {
     }
   }
   if (inventoryOpen && invUI) {
-    const rect = canvas.getBoundingClientRect();
-    const mx = e.clientX - rect.left;
-    const my = e.clientY - rect.top;
-    if (mx >= invWinX && mx <= invWinX + invWinW && my >= invWinY && my <= invWinY + invWinH) {
+    const { mx, my } = getMouseCanvasFromEvent(e);
+if (mx >= invWinX && mx <= invWinX + invWinW && my >= invWinY && my <= invWinY + invWinH) {
       return; // let inventory consume the click
     }
   }
@@ -4436,11 +4426,8 @@ window.addEventListener("mousemove", (e) => {
 
 window.addEventListener("mousemove", (e) => {
   if (!monsterBookOpen || !bookDragging) return;
-  const rect = canvas.getBoundingClientRect();
-  const mx = e.clientX - rect.left;
-  const my = e.clientY - rect.top;
-
-  bookWinX = Math.round(mx - bookDragOffX);
+  const { mx, my } = getMouseCanvasFromEvent(e);
+bookWinX = Math.round(mx - bookDragOffX);
   bookWinY = Math.round(my - bookDragOffY);
 
   // keep on-screen
@@ -4452,10 +4439,8 @@ window.addEventListener("mousemove", (e) => {
 
 window.addEventListener("wheel", (e) => {
   if (!monsterBookOpen || !bookUI) return;
-  const rect = canvas.getBoundingClientRect();
-  const mx = e.clientX - rect.left;
-  const my = e.clientY - rect.top;
-  const c = bookUI.content;
+  const { mx, my } = getMouseCanvasFromEvent(e);
+const c = bookUI.content;
   if (!c) return;
   if (mx >= c.x && mx <= c.x + c.w && my >= c.y && my <= c.y + c.h) {
     e.preventDefault();
@@ -6082,14 +6067,8 @@ function getHotbarLayout() {
     x0 = hotbarPos.x;
     y0 = hotbarPos.y;
   } else {
-    if (typeof window !== "undefined" && window.__MC_MOBILE) {
-      // Mobile default: flush bottom-right (leaves a small padding so it isn't clipped)
-      x0 = Math.round(canvas.width - totalW - 8);
-      y0 = Math.round(canvas.height - box - 8);
-    } else {
-      x0 = Math.round(canvas.width / 2 - totalW / 2);
-      y0 = Math.round(canvas.height - box - 12);
-    }
+    x0 = Math.round(canvas.width / 2 - totalW / 2);
+    y0 = Math.round(canvas.height - box - 12);
   }
   return { x0, y0, box, gap, totalW };
 }
@@ -6198,38 +6177,12 @@ function getHudLayout() {
     x = hudPos.x;
     y = hudPos.y;
   } else {
-    if (typeof window !== "undefined" && window.__MC_MOBILE) {
-      // Mobile default: HP/XP centered along the bottom.
-      x = canvas.width / 2 - w / 2;
-
-      // Background height in drawHud(): fillRect(y-4, ..., hpH + xpH + padding*2)
-      const bgH = hpH + xpH + padding * 2;
-      const bottomPad = 8;
-      y = Math.round(canvas.height - bottomPad - bgH + 4);
-
-      // Avoid overlapping the hotbar if the screen is very narrow.
-      const hb = getHotbarLayout();
-      const hudRect = { x: x - 4, y: y - 4, w: w + 8, h: bgH };
-      const hbRect  = { x: hb.x0, y: hb.y0, w: hb.totalW, h: hb.box };
-      const overlaps =
-        hudRect.x < hbRect.x + hbRect.w &&
-        hudRect.x + hudRect.w > hbRect.x &&
-        hudRect.y < hbRect.y + hbRect.h &&
-        hudRect.y + hudRect.h > hbRect.y;
-
-      if (overlaps) {
-        y = Math.round(hb.y0 - 8 - bgH + 4);
-      }
-
-      y = Math.max(14, y);
-    } else {
-      // Desktop default: centered above the hotbar.
-      const hotbarBoxH = 44; // must match drawHotbar()
-      const hotbarPadBottom = 12; // must match drawHotbar()
-      const hudClearance = hotbarBoxH + hotbarPadBottom + 10;
-      x = canvas.width / 2 - w / 2;
-      y = Math.max(14, canvas.height - (hpH + xpH + padding * 3) - hudClearance);
-    }
+    // Default position: centered above the hotbar.
+    const hotbarBoxH = 44; // must match drawHotbar()
+    const hotbarPadBottom = 12; // must match drawHotbar()
+    const hudClearance = hotbarBoxH + hotbarPadBottom + 10;
+    x = canvas.width / 2 - w / 2;
+    y = Math.max(14, canvas.height - (hpH + xpH + padding * 3) - hudClearance);
   }
 
   return { x, y, w, hpH, xpH, padding };
