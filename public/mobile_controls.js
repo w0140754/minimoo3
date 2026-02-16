@@ -8,7 +8,7 @@
   // - Limits horizontal fill to 92% of usable width to avoid edge overlap (adjustable).
   // - Tries harder to keep the hamburger/menu button above the canvas via CSS + JS.
 
-  const MC_VERSION = "v16-debug";
+  const MC_VERSION = "v17-actionzone-fix";
 
   function isProbablyMobile() {
     const hasTouch =
@@ -114,7 +114,7 @@
       position: fixed;
       left: 0;
       top: 0;
-      width: 20vw;
+      width: 30vw;
       height: 100vh;
       z-index: 2147483000;
       touch-action: none;
@@ -124,9 +124,11 @@
     .mc-action-zone {
       position: fixed;
       right: 0;
-      top: 0;
-      width: 30vw; /* right-side tap zone width */
-      height: 100vh;
+      /* Leave the top-right corner free for hamburger/menu taps */
+      top: calc(env(safe-area-inset-top) + 70px);
+      height: calc(100vh - (env(safe-area-inset-top) + 70px));
+      width: 25vw; /* right-side tap zone width */
+      /* Must be above the canvas but below any menu buttons */
       z-index: 2147483000;
       touch-action: none;
       background: transparent;
@@ -275,6 +277,8 @@
   // ===== Virtual joystick (single instance, no accumulation) =====
   const touchZone = document.createElement("div");
   touchZone.className = "mc-touch-zone";
+  const TOUCH_ZONE_VW = 30; // % of screen width reserved for joystick zone
+  touchZone.style.width = `${TOUCH_ZONE_VW}vw`;
   document.body.appendChild(touchZone);
 
   // ===== Right-side ACTION zone =====
@@ -284,10 +288,14 @@
   //   - Else if near an NPC: interact
   //   - Else: basic attack forward (current facing)
   // This is implemented as a transparent DOM overlay so it doesn't affect desktop.
-  const ACTION_ZONE_VW = 30; // % of screen width (30vw) reserved for ACTION/ATTACK
+  const ACTION_ZONE_VW = 25; // % of screen width (25vw) reserved for ACTION/ATTACK
+  const ACTION_ZONE_TOP_PX = 70; // leave room for hamburger/menu at top
   const actionZone = document.createElement("div");
   actionZone.className = "mc-action-zone";
   actionZone.style.width = `${ACTION_ZONE_VW}vw`;
+  actionZone.style.top = `calc(env(safe-area-inset-top) + ${ACTION_ZONE_TOP_PX}px)`;
+  actionZone.style.height = `calc(100vh - (env(safe-area-inset-top) + ${ACTION_ZONE_TOP_PX}px))`;
+  actionZone.style.zIndex = "2147483000";
   document.body.appendChild(actionZone);
 
   const joy = document.createElement("div");
