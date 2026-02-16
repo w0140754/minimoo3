@@ -1,6 +1,15 @@
 (() => {
   "use strict";
 
+  // ===== Mobile Controls (v16 debug) =====
+  // Changes vs prior:
+  // - Adds an on-screen "MC v16" badge so you can confirm you actually loaded this file.
+  // - Uses iPhone safe-area insets for sizing.
+  // - Limits horizontal fill to 92% of usable width to avoid edge overlap (adjustable).
+  // - Tries harder to keep the hamburger/menu button above the canvas via CSS + JS.
+
+  const MC_VERSION = "v16-debug";
+
   function isProbablyMobile() {
     const hasTouch =
       (navigator.maxTouchPoints && navigator.maxTouchPoints > 0) ||
@@ -16,8 +25,6 @@
 
   if (!isProbablyMobile()) return;
 
-  // Canvas may exist immediately, but some flows re-create/re-style it.
-  // We'll look it up lazily too.
   function getCanvas() {
     return document.getElementById("c");
   }
@@ -25,29 +32,38 @@
   function getVP() {
     const vv = window.visualViewport;
     if (vv && vv.width && vv.height) {
-      return { w: Math.max(1, Math.round(vv.width)), h: Math.max(1, Math.round(vv.height)) };
+      return {
+        w: Math.max(1, Math.round(vv.width)),
+        h: Math.max(1, Math.round(vv.height)),
+      };
     }
     return { w: Math.max(1, window.innerWidth), h: Math.max(1, window.innerHeight) };
   }
 
   function getSafeInsets() {
-    // Read CSS env(safe-area-inset-*) via computed vars.
     const cs = getComputedStyle(document.documentElement);
     const toPx = (v) => {
-      const n = parseFloat(String(v || '').replace('px',''));
+      const n = parseFloat(String(v || "").replace("px", ""));
       return Number.isFinite(n) ? n : 0;
     };
     return {
-      top: toPx(cs.getPropertyValue('--mc-safe-top')),
-      right: toPx(cs.getPropertyValue('--mc-safe-right')),
-      bottom: toPx(cs.getPropertyValue('--mc-safe-bottom')),
-      left: toPx(cs.getPropertyValue('--mc-safe-left')),
+      top: toPx(cs.getPropertyValue("--mc-safe-top")),
+      right: toPx(cs.getPropertyValue("--mc-safe-right")),
+      bottom: toPx(cs.getPropertyValue("--mc-safe-bottom")),
+      left: toPx(cs.getPropertyValue("--mc-safe-left")),
     };
   }
 
   // ===== CSS / layout =====
   const style = document.createElement("style");
   style.textContent = `
+    :root {
+      --mc-safe-top: env(safe-area-inset-top);
+      --mc-safe-right: env(safe-area-inset-right);
+      --mc-safe-bottom: env(safe-area-inset-bottom);
+      --mc-safe-left: env(safe-area-inset-left);
+    }
+
     html, body {
       margin: 0;
       padding: 0;
@@ -73,6 +89,7 @@
       background: #000;
       box-sizing: border-box;
       padding: var(--mc-safe-top) var(--mc-safe-right) var(--mc-safe-bottom) var(--mc-safe-left);
+      z-index: 0;
     }
 
     #c {
@@ -83,6 +100,14 @@
       display: block !important;
       image-rendering: pixelated;
       touch-action: none;
+      z-index: 1;
+    }
+
+    /* Try to keep common menu/hamburger elements above the canvas */
+    #menuBtn, #hamburger, #menu, .hamburger, .menu-btn, .menuButton,
+    [aria-label*="menu" i], [aria-label*="hamburger" i] {
+      z-index: 2147483605 !important;
+      position: fixed !important;
     }
 
     .mc-touch-zone {
@@ -112,6 +137,20 @@
       line-height: 1.35;
     }
     .mc-rotate-overlay strong { font-size: 22px; display:block; margin-bottom: 8px; }
+
+    .mc-debug-badge {
+      position: fixed;
+      left: calc(var(--mc-safe-left) + 10px);
+      top: calc(var(--mc-safe-top) + 10px);
+      z-index: 2147483647;
+      background: rgba(0,0,0,0.6);
+      color: #fff;
+      padding: 6px 8px;
+      border-radius: 10px;
+      font: 12px/1.2 system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+      pointer-events: none;
+      white-space: pre;
+    }
   `;
   document.head.appendChild(style);
 
@@ -137,25 +176,55 @@
     return vp.w >= vp.h;
   }
 
-  // ===== Mobile zoom (camera-safe) =====
-  // Keep the GAME'S canvas coordinate system smaller on mobile, so the camera
-  // uses a smaller view size (zoomed-in world) rather than CSS-cropping.
+  // ===== Camera-safe zoom =====
   const BASE_W = 800;
   const BASE_H = 600;
 
-  // Requested zoom: 1.5x (3/2)
-  const MOBILE_ZOOM = 3 / 2; // 1.5
+  // User requested: 3/2 zoom => 1.5x bigger tiles / less world visible.
+  const MOBILE_ZOOM = 3 / 2;
 
-  // Internal canvas size on mobile (this is what your camera math uses).
-  // Note: width isn't an integer for 800/1.5, so we round to the closest int.
-  // Height is exactly 400.
-  const MOBILE_W = Math.round(BASE_W / MOBILE_ZOOM); // ~533
-  const MOBILE_H = Math.round(BASE_H / MOBILE_ZOOM); // 400
+  // Keep vertical zoom fixed
+  const MOBILE_H = Math.round(BASE_H / MOBILE_ZOOM); // ~400
+  const MIN_MOBILE_W = Math.round(BASE_W / MOBILE_ZOOM); // ~533
 
-  // Allow using more horizontal screen real estate on wide phones.
-  // This increases horizontal field-of-view (no stretching), while keeping the same vertical zoom.
-  // You can raise/lower this cap if you want more/less horizontal view.
+  // Expand horizontal view to use wide screens, but cap it
   const MAX_INTERNAL_W = 960;
+
+  // Fill a bit less than full usable width to avoid edge overlap (adjustable)
+  const HORIZONTAL_FILL = 0.92; // try 0.90 if you want more margin
+
+  function elevateHamburger() {
+    // If the game creates the hamburger dynamically, try to find and raise it.
+    const candidates = [];
+    candidates.push(document.getElementById("menuBtn"));
+    candidates.push(document.getElementById("hamburger"));
+    candidates.push(document.getElementById("menu"));
+    candidates.push(document.querySelector(".hamburger"));
+    candidates.push(document.querySelector(".menu-btn"));
+    candidates.push(document.querySelector(".menuButton"));
+    candidates.push(document.querySelector("[aria-label*='menu' i]"));
+    candidates.push(document.querySelector("[aria-label*='hamburger' i]"));
+
+    for (const el of document.querySelectorAll("button, div, span, a")) {
+      const t = (el.textContent || "").trim();
+      if (t === "☰" || t === "≡") {
+        candidates.push(el);
+        break;
+      }
+    }
+
+    const btn = candidates.find(Boolean);
+    if (!btn) return;
+
+    btn.style.zIndex = "2147483605";
+    const pos = getComputedStyle(btn).position;
+    if (pos !== "fixed" && pos !== "absolute") {
+      const safe = getSafeInsets();
+      btn.style.position = "fixed";
+      btn.style.left = Math.round(safe.left + 10) + "px";
+      btn.style.top = Math.round(safe.top + 10) + "px";
+    }
+  }
 
   function resizeCanvasInternal() {
     const ctx = ensureWrap();
@@ -167,24 +236,34 @@
     const usableW = Math.max(1, vp.w - safe.left - safe.right);
     const usableH = Math.max(1, vp.h - safe.top - safe.bottom);
 
-    // Use smaller internal size on mobile landscape so camera follows correctly.
-    // Keep vertical zoom fixed, but expand horizontal view to better match the phone aspect ratio.
+    // Match internal width to phone aspect ratio (within caps), keeping vertical zoom fixed.
+    const desiredW = Math.round(MOBILE_H * (usableW / usableH));
+    const internalW = Math.max(MIN_MOBILE_W, Math.min(desiredW, MAX_INTERNAL_W));
     const internalH = MOBILE_H;
-    const desiredW = Math.round(internalH * (usableW / usableH));
-    const internalW = Math.max(MOBILE_W, Math.min(desiredW, MAX_INTERNAL_W));
 
     // Force internal resolution (THIS is what the camera uses).
     if (canvas.width !== internalW) canvas.width = internalW;
     if (canvas.height !== internalH) canvas.height = internalH;
 
-    // Scale the smaller canvas up to fit the safe-area (uniform scale, no distortion).
-    const scale = Math.min(usableW / internalW, usableH / internalH);
+    // Scale to fit within safe area, with a little horizontal margin.
+    const scale = Math.min((usableW * HORIZONTAL_FILL) / internalW, usableH / internalH);
     const dispW = Math.round(internalW * scale);
     const dispH = Math.round(internalH * scale);
 
-    // Centered via CSS (left/top 50% + translate). Just set size.
     canvas.style.width = dispW + "px";
     canvas.style.height = dispH + "px";
+
+    if (debugBadge) {
+      debugBadge.textContent =
+        `MC ${MC_VERSION}\n` +
+        `vp: ${vp.w}x${vp.h}\n` +
+        `safe: t${Math.round(safe.top)} r${Math.round(safe.right)} b${Math.round(safe.bottom)} l${Math.round(safe.left)}\n` +
+        `usable: ${usableW}x${usableH}\n` +
+        `internal: ${internalW}x${internalH}\n` +
+        `disp: ${dispW}x${dispH}`;
+    }
+
+    elevateHamburger();
   }
 
   // Run resize multiple times to "win" races with game init flows.
@@ -205,6 +284,12 @@
   rotateOverlay.className = "mc-rotate-overlay";
   rotateOverlay.innerHTML = `<div><strong>Rotate your phone</strong>This game is landscape-only.</div>`;
   document.body.appendChild(rotateOverlay);
+
+  // ===== Debug badge =====
+  const debugBadge = document.createElement("div");
+  debugBadge.className = "mc-debug-badge";
+  debugBadge.textContent = `MC ${MC_VERSION}`;
+  document.body.appendChild(debugBadge);
 
   // ===== Virtual joystick (single instance, no accumulation) =====
   const touchZone = document.createElement("div");
@@ -243,7 +328,8 @@
   const DEADZONE = 10;
 
   let active = false;
-  let startX = 0, startY = 0;
+  let startX = 0,
+    startY = 0;
   let currentDirs = new Set();
 
   function dispatchKey(type, key) {
@@ -284,7 +370,9 @@
     startY = y;
     showJoystick(x, y);
     if (typeof pointerId === "number" && touchZone.setPointerCapture) {
-      try { touchZone.setPointerCapture(pointerId); } catch (_) {}
+      try {
+        touchZone.setPointerCapture(pointerId);
+      } catch (_) {}
     }
   }
 
@@ -315,7 +403,9 @@
     stopAll();
     hideJoystick();
     if (typeof pointerId === "number" && touchZone.releasePointerCapture) {
-      try { touchZone.releasePointerCapture(pointerId); } catch (_) {}
+      try {
+        touchZone.releasePointerCapture(pointerId);
+      } catch (_) {}
     }
   }
 
@@ -362,46 +452,6 @@
     if (document.hidden) onEnd(undefined);
   });
 
-
-  function elevateHamburger() {
-    // Try to find the game's hamburger/menu button and ensure it's above the canvas on mobile.
-    // This is defensive because the game may create the button dynamically with different ids/classes.
-    const candidates = [];
-
-    // Common ids/classes
-    candidates.push(document.getElementById("menuBtn"));
-    candidates.push(document.getElementById("hamburger"));
-    candidates.push(document.getElementById("menu"));
-    candidates.push(document.querySelector(".hamburger"));
-    candidates.push(document.querySelector(".menu-btn"));
-    candidates.push(document.querySelector(".menuButton"));
-    candidates.push(document.querySelector("[aria-label*='menu' i]"));
-    candidates.push(document.querySelector("[aria-label*='hamburger' i]"));
-
-    // Button containing the ☰ character
-    for (const el of document.querySelectorAll("button, div, span, a")) {
-      const t = (el.textContent || "").trim();
-      if (t === "☰" || t === "≡") {
-        candidates.push(el);
-        break;
-      }
-    }
-
-    const btn = candidates.find(Boolean);
-    if (!btn) return;
-
-    const safe = getSafeInsets();
-    // Make sure it's visible and on top.
-    btn.style.zIndex = "2147483605";
-    // If it's not already fixed/absolute, pin it.
-    const pos = getComputedStyle(btn).position;
-    if (pos !== "fixed" && pos !== "absolute") {
-      btn.style.position = "fixed";
-      btn.style.left = Math.round(safe.left + 10) + "px";
-      btn.style.top = Math.round(safe.top + 10) + "px";
-    }
-  }
-
   // ===== Orientation handling =====
   function applyOrientationMode() {
     const landscape = isLandscapeNow();
@@ -414,7 +464,6 @@
       touchZone.style.display = "block";
       resizeCanvasInternal();
       scheduleResizes();
-      // Ensure menu button stays above the canvas.
       setTimeout(elevateHamburger, 0);
     }
   }
