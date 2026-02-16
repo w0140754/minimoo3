@@ -174,7 +174,7 @@
   const MIN_MOBILE_W = Math.round(BASE_W / MOBILE_ZOOM); // ~533
 
   // Expand horizontal view to use wide screens, but cap it
-  const MAX_INTERNAL_W = 960;
+  const MAX_INTERNAL_W = 900;
 
   // Fill a bit less than full usable width to avoid edge overlap (adjustable)
   const HORIZONTAL_FILL = 0.92; // try 0.90 if you want more margin
