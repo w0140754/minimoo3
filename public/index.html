@@ -3333,10 +3333,19 @@ function setMoveKey(e, down) {
   sendInput();
 }
 
-function getMouseWorldFromEvent(e) {
+function getMouseCanvasFromEvent(e) {
   const rect = canvas.getBoundingClientRect();
-  const mx = e.clientX - rect.left;
-  const my = e.clientY - rect.top;
+  // Map from CSS pixels (clientX/Y) into canvas pixels (canvas.width/height).
+  // This is required whenever the canvas is visually scaled with CSS.
+  const scaleX = canvas.width / rect.width;
+  const scaleY = canvas.height / rect.height;
+  const mx = (e.clientX - rect.left) * scaleX;
+  const my = (e.clientY - rect.top) * scaleY;
+  return { mx, my, rect, scaleX, scaleY };
+}
+
+function getMouseWorldFromEvent(e) {
+  const { mx, my } = getMouseCanvasFromEvent(e);
   return { mx, my, wx: camX + mx, wy: camY + my };
 }
 
@@ -3909,9 +3918,9 @@ canvas.addEventListener("contextmenu", (e) => {
 
 canvas.addEventListener("mousemove", (e) => {
   if (!editorOpen) return;
-  const rect = canvas.getBoundingClientRect();
-  editorMouseX = e.clientX - rect.left;
-  editorMouseY = e.clientY - rect.top;
+  const { mx, my } = getMouseCanvasFromEvent(e);
+  editorMouseX = mx;
+  editorMouseY = my;
   editorMouseHas = true;
 });
 
@@ -3927,9 +3936,7 @@ canvas.addEventListener("mousedown", (e) => {
 
   // If inventory is open and click is inside it, let inventory handle it.
   if (inventoryOpen && invUI) {
-    const rect = canvas.getBoundingClientRect();
-    const mx = e.clientX - rect.left;
-    const my = e.clientY - rect.top;
+    const { mx, my, rect } = getMouseCanvasFromEvent(e);
     // treat inventory window as a block region
     if (mx >= invWinX && mx <= invWinX + invWinW && my >= invWinY && my <= invWinY + invWinH) {
       return; // let inventory mousedown run
@@ -3939,9 +3946,7 @@ canvas.addEventListener("mousedown", (e) => {
   e.preventDefault();
   e.stopImmediatePropagation();
 
-  const rect = canvas.getBoundingClientRect();
-  const mx = e.clientX - rect.left;
-  const my = e.clientY - rect.top;
+  const { mx, my, rect } = getMouseCanvasFromEvent(e);
 
   if (!map) return;
   const tx = Math.floor((camX + mx) / TILE_SIZE);
@@ -3973,9 +3978,7 @@ canvas.addEventListener("mousedown", (e) => {
   e.preventDefault();
   e.stopImmediatePropagation();
 
-  const rect = canvas.getBoundingClientRect();
-  const mx = e.clientX - rect.left;
-  const my = e.clientY - rect.top;
+  const { mx, my, rect } = getMouseCanvasFromEvent(e);
 
   // If a drop confirmation dialog is open, handle it first.
   if (dropConfirm) {
@@ -4119,9 +4122,7 @@ canvas.addEventListener("mouseup", (e) => {
   // If we never pressed down inside a slot and we're not dragging, ignore.
   if (invPointerDownSlot == null && !draggingInv) return;
 
-  const rect = canvas.getBoundingClientRect();
-  const mx = e.clientX - rect.left;
-  const my = e.clientY - rect.top;
+  const { mx, my, rect } = getMouseCanvasFromEvent(e);
 
   const me = (typeof worldPlayers !== "undefined" && typeof myId !== "undefined") ? worldPlayers?.[myId] : null;
   const slots = me?.inventory?.slots || [];
@@ -4241,9 +4242,7 @@ canvas.addEventListener("mousedown", (e) => {
   e.preventDefault();
   e.stopImmediatePropagation();
 
-  const rect = canvas.getBoundingClientRect();
-  const mx = e.clientX - rect.left;
-  const my = e.clientY - rect.top;
+  const { mx, my, rect } = getMouseCanvasFromEvent(e);
 
   // close button
   const c = skillsUI.close;
@@ -4290,9 +4289,7 @@ canvas.addEventListener("mousedown", (e) => {
 
 canvas.addEventListener("mousemove", (e) => {
   if (!skillsOpen || !skillsDragging) return;
-  const rect = canvas.getBoundingClientRect();
-  const mx = e.clientX - rect.left;
-  const my = e.clientY - rect.top;
+  const { mx, my, rect } = getMouseCanvasFromEvent(e);
 
   skillsWinX = Math.round(mx - skillsDragOffX);
   skillsWinY = Math.round(my - skillsDragOffY);
@@ -4301,9 +4298,7 @@ canvas.addEventListener("mousemove", (e) => {
 
 window.addEventListener("mousemove", (e) => {
   if (!inventoryOpen || !invDragging) return;
-  const rect = canvas.getBoundingClientRect();
-  const mx = e.clientX - rect.left;
-  const my = e.clientY - rect.top;
+  const { mx, my, rect } = getMouseCanvasFromEvent(e);
 
   invWinX = Math.round(mx - invDragOffX);
   invWinY = Math.round(my - invDragOffY);
@@ -4322,9 +4317,7 @@ canvas.addEventListener("mousedown", (e) => {
   e.preventDefault();
   e.stopImmediatePropagation();
 
-  const rect = canvas.getBoundingClientRect();
-  const mx = e.clientX - rect.left;
-  const my = e.clientY - rect.top;
+  const { mx, my, rect } = getMouseCanvasFromEvent(e);
 
   // close button
   if (bookCloseRect && mx >= bookCloseRect.x && mx <= bookCloseRect.x + bookCloseRect.w && my >= bookCloseRect.y && my <= bookCloseRect.y + bookCloseRect.h) {
@@ -4357,9 +4350,7 @@ canvas.addEventListener("mousedown", (e) => {
     }
   }
   if (inventoryOpen && invUI) {
-    const rect = canvas.getBoundingClientRect();
-    const mx = e.clientX - rect.left;
-    const my = e.clientY - rect.top;
+    const { mx, my, rect } = getMouseCanvasFromEvent(e);
     if (mx >= invWinX && mx <= invWinX + invWinW && my >= invWinY && my <= invWinY + invWinH) {
       return; // let inventory consume the click
     }
@@ -4436,9 +4427,7 @@ window.addEventListener("mousemove", (e) => {
 
 window.addEventListener("mousemove", (e) => {
   if (!monsterBookOpen || !bookDragging) return;
-  const rect = canvas.getBoundingClientRect();
-  const mx = e.clientX - rect.left;
-  const my = e.clientY - rect.top;
+  const { mx, my, rect } = getMouseCanvasFromEvent(e);
 
   bookWinX = Math.round(mx - bookDragOffX);
   bookWinY = Math.round(my - bookDragOffY);
@@ -4452,9 +4441,7 @@ window.addEventListener("mousemove", (e) => {
 
 window.addEventListener("wheel", (e) => {
   if (!monsterBookOpen || !bookUI) return;
-  const rect = canvas.getBoundingClientRect();
-  const mx = e.clientX - rect.left;
-  const my = e.clientY - rect.top;
+  const { mx, my, rect } = getMouseCanvasFromEvent(e);
   const c = bookUI.content;
   if (!c) return;
   if (mx >= c.x && mx <= c.x + c.w && my >= c.y && my <= c.y + c.h) {
