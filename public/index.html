@@ -3333,19 +3333,10 @@ function setMoveKey(e, down) {
   sendInput();
 }
 
-function getMouseCanvasFromEvent(e) {
-  const rect = canvas.getBoundingClientRect();
-  // Map from CSS pixels (clientX/Y) into canvas pixels (canvas.width/height).
-  // This is required whenever the canvas is visually scaled with CSS.
-  const scaleX = canvas.width / rect.width;
-  const scaleY = canvas.height / rect.height;
-  const mx = (e.clientX - rect.left) * scaleX;
-  const my = (e.clientY - rect.top) * scaleY;
-  return { mx, my, rect, scaleX, scaleY };
-}
-
 function getMouseWorldFromEvent(e) {
-  const { mx, my } = getMouseCanvasFromEvent(e);
+  const rect = canvas.getBoundingClientRect();
+  const mx = e.clientX - rect.left;
+  const my = e.clientY - rect.top;
   return { mx, my, wx: camX + mx, wy: camY + my };
 }
 
@@ -3918,9 +3909,9 @@ canvas.addEventListener("contextmenu", (e) => {
 
 canvas.addEventListener("mousemove", (e) => {
   if (!editorOpen) return;
-  const { mx, my } = getMouseCanvasFromEvent(e);
-  editorMouseX = mx;
-  editorMouseY = my;
+  const rect = canvas.getBoundingClientRect();
+  editorMouseX = e.clientX - rect.left;
+  editorMouseY = e.clientY - rect.top;
   editorMouseHas = true;
 });
 
@@ -3936,7 +3927,9 @@ canvas.addEventListener("mousedown", (e) => {
 
   // If inventory is open and click is inside it, let inventory handle it.
   if (inventoryOpen && invUI) {
-    const { mx, my, rect } = getMouseCanvasFromEvent(e);
+    const rect = canvas.getBoundingClientRect();
+    const mx = e.clientX - rect.left;
+    const my = e.clientY - rect.top;
     // treat inventory window as a block region
     if (mx >= invWinX && mx <= invWinX + invWinW && my >= invWinY && my <= invWinY + invWinH) {
       return; // let inventory mousedown run
@@ -3946,7 +3939,9 @@ canvas.addEventListener("mousedown", (e) => {
   e.preventDefault();
   e.stopImmediatePropagation();
 
-  const { mx, my, rect } = getMouseCanvasFromEvent(e);
+  const rect = canvas.getBoundingClientRect();
+  const mx = e.clientX - rect.left;
+  const my = e.clientY - rect.top;
 
   if (!map) return;
   const tx = Math.floor((camX + mx) / TILE_SIZE);
@@ -3978,7 +3973,9 @@ canvas.addEventListener("mousedown", (e) => {
   e.preventDefault();
   e.stopImmediatePropagation();
 
-  const { mx, my, rect } = getMouseCanvasFromEvent(e);
+  const rect = canvas.getBoundingClientRect();
+  const mx = e.clientX - rect.left;
+  const my = e.clientY - rect.top;
 
   // If a drop confirmation dialog is open, handle it first.
   if (dropConfirm) {
@@ -4122,7 +4119,9 @@ canvas.addEventListener("mouseup", (e) => {
   // If we never pressed down inside a slot and we're not dragging, ignore.
   if (invPointerDownSlot == null && !draggingInv) return;
 
-  const { mx, my, rect } = getMouseCanvasFromEvent(e);
+  const rect = canvas.getBoundingClientRect();
+  const mx = e.clientX - rect.left;
+  const my = e.clientY - rect.top;
 
   const me = (typeof worldPlayers !== "undefined" && typeof myId !== "undefined") ? worldPlayers?.[myId] : null;
   const slots = me?.inventory?.slots || [];
@@ -4242,7 +4241,9 @@ canvas.addEventListener("mousedown", (e) => {
   e.preventDefault();
   e.stopImmediatePropagation();
 
-  const { mx, my, rect } = getMouseCanvasFromEvent(e);
+  const rect = canvas.getBoundingClientRect();
+  const mx = e.clientX - rect.left;
+  const my = e.clientY - rect.top;
 
   // close button
   const c = skillsUI.close;
@@ -4289,7 +4290,9 @@ canvas.addEventListener("mousedown", (e) => {
 
 canvas.addEventListener("mousemove", (e) => {
   if (!skillsOpen || !skillsDragging) return;
-  const { mx, my, rect } = getMouseCanvasFromEvent(e);
+  const rect = canvas.getBoundingClientRect();
+  const mx = e.clientX - rect.left;
+  const my = e.clientY - rect.top;
 
   skillsWinX = Math.round(mx - skillsDragOffX);
   skillsWinY = Math.round(my - skillsDragOffY);
@@ -4298,7 +4301,9 @@ canvas.addEventListener("mousemove", (e) => {
 
 window.addEventListener("mousemove", (e) => {
   if (!inventoryOpen || !invDragging) return;
-  const { mx, my, rect } = getMouseCanvasFromEvent(e);
+  const rect = canvas.getBoundingClientRect();
+  const mx = e.clientX - rect.left;
+  const my = e.clientY - rect.top;
 
   invWinX = Math.round(mx - invDragOffX);
   invWinY = Math.round(my - invDragOffY);
@@ -4317,7 +4322,9 @@ canvas.addEventListener("mousedown", (e) => {
   e.preventDefault();
   e.stopImmediatePropagation();
 
-  const { mx, my, rect } = getMouseCanvasFromEvent(e);
+  const rect = canvas.getBoundingClientRect();
+  const mx = e.clientX - rect.left;
+  const my = e.clientY - rect.top;
 
   // close button
   if (bookCloseRect && mx >= bookCloseRect.x && mx <= bookCloseRect.x + bookCloseRect.w && my >= bookCloseRect.y && my <= bookCloseRect.y + bookCloseRect.h) {
@@ -4350,7 +4357,9 @@ canvas.addEventListener("mousedown", (e) => {
     }
   }
   if (inventoryOpen && invUI) {
-    const { mx, my, rect } = getMouseCanvasFromEvent(e);
+    const rect = canvas.getBoundingClientRect();
+    const mx = e.clientX - rect.left;
+    const my = e.clientY - rect.top;
     if (mx >= invWinX && mx <= invWinX + invWinW && my >= invWinY && my <= invWinY + invWinH) {
       return; // let inventory consume the click
     }
@@ -4427,7 +4436,9 @@ window.addEventListener("mousemove", (e) => {
 
 window.addEventListener("mousemove", (e) => {
   if (!monsterBookOpen || !bookDragging) return;
-  const { mx, my, rect } = getMouseCanvasFromEvent(e);
+  const rect = canvas.getBoundingClientRect();
+  const mx = e.clientX - rect.left;
+  const my = e.clientY - rect.top;
 
   bookWinX = Math.round(mx - bookDragOffX);
   bookWinY = Math.round(my - bookDragOffY);
@@ -4441,7 +4452,9 @@ window.addEventListener("mousemove", (e) => {
 
 window.addEventListener("wheel", (e) => {
   if (!monsterBookOpen || !bookUI) return;
-  const { mx, my, rect } = getMouseCanvasFromEvent(e);
+  const rect = canvas.getBoundingClientRect();
+  const mx = e.clientX - rect.left;
+  const my = e.clientY - rect.top;
   const c = bookUI.content;
   if (!c) return;
   if (mx >= c.x && mx <= c.x + c.w && my >= c.y && my <= c.y + c.h) {
@@ -6069,8 +6082,14 @@ function getHotbarLayout() {
     x0 = hotbarPos.x;
     y0 = hotbarPos.y;
   } else {
-    x0 = Math.round(canvas.width / 2 - totalW / 2);
-    y0 = Math.round(canvas.height - box - 12);
+    if (typeof window !== "undefined" && window.__MC_MOBILE) {
+      // Mobile default: flush bottom-right (leaves a small padding so it isn't clipped)
+      x0 = Math.round(canvas.width - totalW - 8);
+      y0 = Math.round(canvas.height - box - 8);
+    } else {
+      x0 = Math.round(canvas.width / 2 - totalW / 2);
+      y0 = Math.round(canvas.height - box - 12);
+    }
   }
   return { x0, y0, box, gap, totalW };
 }
@@ -6179,12 +6198,38 @@ function getHudLayout() {
     x = hudPos.x;
     y = hudPos.y;
   } else {
-    // Default position: centered above the hotbar.
-    const hotbarBoxH = 44; // must match drawHotbar()
-    const hotbarPadBottom = 12; // must match drawHotbar()
-    const hudClearance = hotbarBoxH + hotbarPadBottom + 10;
-    x = canvas.width / 2 - w / 2;
-    y = Math.max(14, canvas.height - (hpH + xpH + padding * 3) - hudClearance);
+    if (typeof window !== "undefined" && window.__MC_MOBILE) {
+      // Mobile default: HP/XP centered along the bottom.
+      x = canvas.width / 2 - w / 2;
+
+      // Background height in drawHud(): fillRect(y-4, ..., hpH + xpH + padding*2)
+      const bgH = hpH + xpH + padding * 2;
+      const bottomPad = 8;
+      y = Math.round(canvas.height - bottomPad - bgH + 4);
+
+      // Avoid overlapping the hotbar if the screen is very narrow.
+      const hb = getHotbarLayout();
+      const hudRect = { x: x - 4, y: y - 4, w: w + 8, h: bgH };
+      const hbRect  = { x: hb.x0, y: hb.y0, w: hb.totalW, h: hb.box };
+      const overlaps =
+        hudRect.x < hbRect.x + hbRect.w &&
+        hudRect.x + hudRect.w > hbRect.x &&
+        hudRect.y < hbRect.y + hbRect.h &&
+        hudRect.y + hudRect.h > hbRect.y;
+
+      if (overlaps) {
+        y = Math.round(hb.y0 - 8 - bgH + 4);
+      }
+
+      y = Math.max(14, y);
+    } else {
+      // Desktop default: centered above the hotbar.
+      const hotbarBoxH = 44; // must match drawHotbar()
+      const hotbarPadBottom = 12; // must match drawHotbar()
+      const hudClearance = hotbarBoxH + hotbarPadBottom + 10;
+      x = canvas.width / 2 - w / 2;
+      y = Math.max(14, canvas.height - (hpH + xpH + padding * 3) - hudClearance);
+    }
   }
 
   return { x, y, w, hpH, xpH, padding };

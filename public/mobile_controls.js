@@ -25,6 +25,9 @@
 
   if (!isProbablyMobile()) return;
 
+  // Let the game code know we are running in the mobile/PWA layout.
+  window.__MC_MOBILE = true;
+
   function getCanvas() {
     return document.getElementById("c");
   }
@@ -73,11 +76,23 @@
       overscroll-behavior: none;
       touch-action: manipulation;
       background: #000;
+      -webkit-touch-callout: none;
+      -webkit-user-select: none;
+      user-select: none;
+      -webkit-tap-highlight-color: transparent;
     }
 
     /* Hide simple desktop text headers if present */
     body > h1, body > p {
       display: none !important;
+    }
+
+
+    #gameWrap, #c, .mc-touch-zone, .mc-action-zone, button, .main-menu, .main-menu-item {
+      -webkit-touch-callout: none;
+      -webkit-user-select: none;
+      user-select: none;
+      -webkit-tap-highlight-color: transparent;
     }
 
     #gameWrap {
@@ -152,6 +167,18 @@
     .mc-rotate-overlay strong { font-size: 22px; display:block; margin-bottom: 8px; }
   `;
   document.head.appendChild(style);
+
+  // Prevent long-press text selection / callouts (iOS copy/translate menu)
+  const blockCallout = (e) => {
+    const t = e.target;
+    const wrap = document.getElementById("gameWrap");
+    if (wrap && t && wrap.contains(t)) {
+      e.preventDefault();
+    }
+  };
+  document.addEventListener("contextmenu", blockCallout, { passive: false });
+  document.addEventListener("selectstart", blockCallout, { passive: false });
+
 
   // Ensure wrapper exists and owns the canvas.
   function ensureWrap() {
