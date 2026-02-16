@@ -114,7 +114,18 @@
       position: fixed;
       left: 0;
       top: 0;
-      width: 30vw;
+      width: 20vw;
+      height: 100vh;
+      z-index: 2147483000;
+      touch-action: none;
+      background: transparent;
+    }
+
+    .mc-action-zone {
+      position: fixed;
+      right: 0;
+      top: 0;
+      width: 30vw; /* right-side tap zone width */
       height: 100vh;
       z-index: 2147483000;
       touch-action: none;
@@ -169,26 +180,15 @@
   // User requested: 3/2 zoom => 1.5x bigger tiles / less world visible.
   const MOBILE_ZOOM = 3 / 2;
 
-  // Keep vertical zoom fixed.
-  // We will always scale the *display* to fill the usable height.
-  // Then we choose an internal width that preserves left/right margins
-  // (camera-notch safety) instead of shrinking the whole game and
-  // creating top/bottom letterboxing.
+  // Keep vertical zoom fixed
   const MOBILE_H = Math.round(BASE_H / MOBILE_ZOOM); // ~400
-
-  // Minimum internal width. If this is too high, some devices will be
-  // forced to scale down by width, leaving unused vertical space.
-  // Lowering this lets us keep full-height display while simply showing
-  // less horizontal world on narrower landscape phones.
-  const MIN_MOBILE_W = 420;
+  const MIN_MOBILE_W = Math.round(BASE_W / MOBILE_ZOOM); // ~533
 
   // Expand horizontal view to use wide screens, but cap it
   const MAX_INTERNAL_W = 960;
 
   // Fill a bit less than full usable width to avoid edge overlap (adjustable)
-  // How much of the safe usable width we allow the *canvas* to occupy.
-  // Lower = bigger left/right margins (safer around camera cutouts).
-  const HORIZONTAL_FILL = 0.90;
+  const HORIZONTAL_FILL = 0.92; // try 0.90 if you want more margin
 
   function elevateHamburger() {
     // If the game creates the hamburger dynamically, try to find and raise it.
@@ -233,25 +233,17 @@
     const usableW = Math.max(1, vp.w - safe.left - safe.right);
     const usableH = Math.max(1, vp.h - safe.top - safe.bottom);
 
-    // Goal:
-    // 1) Fill usable height (no top/bottom letterboxing)
-    // 2) Keep some empty space on the left/right (avoid camera notch overlap)
-    //
-    // We do that by fixing internalH, scaling to fill height, then picking
-    // an internalW that will render to <= usableW * HORIZONTAL_FILL.
+    // Match internal width to phone aspect ratio (within caps), keeping vertical zoom fixed.
+    const desiredW = Math.round(MOBILE_H * (usableW / usableH));
+    const internalW = Math.max(MIN_MOBILE_W, Math.min(desiredW, MAX_INTERNAL_W));
     const internalH = MOBILE_H;
-    const scaleToFillH = usableH / internalH;
-    const targetInternalW = Math.round((usableW * HORIZONTAL_FILL) / scaleToFillH);
-    const internalW = Math.max(MIN_MOBILE_W, Math.min(targetInternalW, MAX_INTERNAL_W));
 
     // Force internal resolution (THIS is what the camera uses).
     if (canvas.width !== internalW) canvas.width = internalW;
     if (canvas.height !== internalH) canvas.height = internalH;
 
-    // Scale to fill height.
-    // (If internalW hits MAX_INTERNAL_W, it's still possible to be width-limited on
-    // ultra-wide devices; in that case we gracefully fall back to the min() behavior.)
-    const scale = Math.min(usableH / internalH, (usableW * HORIZONTAL_FILL) / internalW);
+    // Scale to fit within safe area, with a little horizontal margin.
+    const scale = Math.min((usableW * HORIZONTAL_FILL) / internalW, usableH / internalH);
     const dispW = Math.round(internalW * scale);
     const dispH = Math.round(internalH * scale);
 
@@ -284,6 +276,19 @@
   const touchZone = document.createElement("div");
   touchZone.className = "mc-touch-zone";
   document.body.appendChild(touchZone);
+
+  // ===== Right-side ACTION zone =====
+  // Design goal: no visible button.
+  // Tapping the right side triggers a context action:
+  //   - If standing on a portal: travel
+  //   - Else if near an NPC: interact
+  //   - Else: basic attack forward (current facing)
+  // This is implemented as a transparent DOM overlay so it doesn't affect desktop.
+  const ACTION_ZONE_VW = 30; // % of screen width (30vw) reserved for ACTION/ATTACK
+  const actionZone = document.createElement("div");
+  actionZone.className = "mc-action-zone";
+  actionZone.style.width = `${ACTION_ZONE_VW}vw`;
+  document.body.appendChild(actionZone);
 
   const joy = document.createElement("div");
   const knob = document.createElement("div");
@@ -320,6 +325,33 @@
   let startX = 0,
     startY = 0;
   let currentDirs = new Set();
+
+  // ===== Context awareness (avoid stealing taps from UI overlays) =====
+  function isMainMenuOpenNow() {
+    const mm = document.getElementById("mainMenu");
+    return !!(mm && mm.classList && mm.classList.contains("open"));
+  }
+
+  // These are declared in index.html with `let ...Open = false;`.
+  // We must reference them defensively so this file can run before index.html loads.
+  function isAnyCanvasUiOpenNow() {
+    try {
+      const inv = (typeof inventoryOpen !== "undefined") && !!inventoryOpen;
+      const skl = (typeof skillsOpen !== "undefined") && !!skillsOpen;
+      const book = (typeof monsterBookOpen !== "undefined") && !!monsterBookOpen;
+      const ed = (typeof editorOpen !== "undefined") && !!editorOpen;
+      return inv || skl || book || ed;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  function updateActionZoneEnabled() {
+    // When an in-canvas UI is open (inventory/skills/book/editor) or the hamburger menu is open,
+    // let taps go through to the canvas so players can click UI elements.
+    const block = isMainMenuOpenNow() || isAnyCanvasUiOpenNow();
+    actionZone.style.pointerEvents = block ? "none" : "auto";
+  }
 
   function dispatchKey(type, key) {
     const ev = new KeyboardEvent(type, { key, bubbles: true });
@@ -436,9 +468,134 @@
     { passive: false }
   );
 
-  window.addEventListener("blur", () => onEnd(undefined));
+  // ===== Right-side ACTION (tap to interact / attack-forward) =====
+  let actionActive = false;
+  let actionRepeatInterval = null;
+  let actionHoldTimeout = null;
+
+  function stopActionRepeat() {
+    actionActive = false;
+    if (actionHoldTimeout) {
+      clearTimeout(actionHoldTimeout);
+      actionHoldTimeout = null;
+    }
+    if (actionRepeatInterval) {
+      clearInterval(actionRepeatInterval);
+      actionRepeatInterval = null;
+    }
+  }
+
+  function doContextActionOnce() {
+    // Portal takes priority.
+    try {
+      if (typeof isOnPortal === "function" && isOnPortal()) {
+        if (typeof startPortalFade === "function") startPortalFade();
+        else {
+          // Fallback to E key (will call portal/interact handlers in your game)
+          dispatchKey("keydown", "e");
+          dispatchKey("keyup", "e");
+        }
+        return "portal";
+      }
+    } catch (_) {}
+
+    // NPC interaction next.
+    try {
+      if (typeof computeNearestNpc === "function") {
+        const near = computeNearestNpc();
+        if (near) {
+          if (typeof tryInteract === "function") tryInteract();
+          else {
+            dispatchKey("keydown", "e");
+            dispatchKey("keyup", "e");
+          }
+          return "npc";
+        }
+      }
+    } catch (_) {}
+
+    // Otherwise: basic attack forward (uses current facing on the server).
+    try {
+      if (typeof sendAttack === "function") {
+        sendAttack();
+        return "attack";
+      }
+    } catch (_) {}
+
+    return "none";
+  }
+
+  actionZone.addEventListener(
+    "pointerdown",
+    (e) => {
+      if (!isLandscapeNow()) return;
+
+      // If UI is open, this zone should be disabled (pointer-events: none),
+      // but keep this guard just in case.
+      updateActionZoneEnabled();
+      if (actionZone.style.pointerEvents === "none") return;
+
+      e.preventDefault();
+
+      const kind = doContextActionOnce();
+      if (kind !== "attack") {
+        stopActionRepeat();
+        return;
+      }
+
+      // Optional QoL: hold-to-attack. We only start repeating if the finger is held briefly.
+      actionActive = true;
+      if (typeof e.pointerId === "number" && actionZone.setPointerCapture) {
+        try { actionZone.setPointerCapture(e.pointerId); } catch (_) {}
+      }
+
+      actionHoldTimeout = setTimeout(() => {
+        if (!actionActive) return;
+        if (actionRepeatInterval) return;
+        actionRepeatInterval = setInterval(() => {
+          if (!actionActive) return;
+          try {
+            if (typeof sendAttack === "function") sendAttack();
+          } catch (_) {}
+        }, 90);
+      }, 260);
+    },
+    { passive: false }
+  );
+
+  actionZone.addEventListener(
+    "pointerup",
+    (e) => {
+      e.preventDefault();
+      stopActionRepeat();
+      if (typeof e.pointerId === "number" && actionZone.releasePointerCapture) {
+        try { actionZone.releasePointerCapture(e.pointerId); } catch (_) {}
+      }
+    },
+    { passive: false }
+  );
+
+  actionZone.addEventListener(
+    "pointercancel",
+    (e) => {
+      e.preventDefault();
+      stopActionRepeat();
+      if (typeof e.pointerId === "number" && actionZone.releasePointerCapture) {
+        try { actionZone.releasePointerCapture(e.pointerId); } catch (_) {}
+      }
+    },
+    { passive: false }
+  );
+
+  window.addEventListener("blur", () => {
+    onEnd(undefined);
+    stopActionRepeat();
+  });
   document.addEventListener("visibilitychange", () => {
-    if (document.hidden) onEnd(undefined);
+    if (document.hidden) {
+      onEnd(undefined);
+      stopActionRepeat();
+    }
   });
 
   // ===== Orientation handling =====
@@ -448,12 +605,16 @@
 
     if (!landscape) {
       onEnd(undefined);
+      stopActionRepeat();
       touchZone.style.display = "none";
+      actionZone.style.display = "none";
     } else {
       touchZone.style.display = "block";
+      actionZone.style.display = "block";
       resizeCanvasInternal();
       scheduleResizes();
       setTimeout(elevateHamburger, 0);
+      updateActionZoneEnabled();
     }
   }
 
@@ -487,5 +648,10 @@
   // Initial
   attachCanvasObservers();
   applyOrientationMode();
+  // Inventory/skills/book are drawn inside the canvas and toggle via globals,
+  // so we poll lightly to disable the action zone while UI is open.
+  setInterval(() => {
+    if (isLandscapeNow()) updateActionZoneEnabled();
+  }, 180);
   scheduleResizes();
 })();
