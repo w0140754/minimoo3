@@ -336,8 +336,8 @@ let draggingHotbarBar = false;
 let hotbarBarDragOffsetX = 0;
 let hotbarBarDragOffsetY = 0;
 
-const HUD_POS_STORAGE_KEY = "uiHudPos_v1";
-const HOTBAR_POS_STORAGE_KEY = "uiHotbarPos_v1";
+const HUD_POS_STORAGE_KEY = (typeof window !== "undefined" && window.__MC_MOBILE) ? "uiHudPos_mobile_v1" : "uiHudPos_v1";
+const HOTBAR_POS_STORAGE_KEY = (typeof window !== "undefined" && window.__MC_MOBILE) ? "uiHotbarPos_mobile_v1" : "uiHotbarPos_v1";
 
 function loadUiLayout() {
   try {
@@ -6067,8 +6067,16 @@ function getHotbarLayout() {
     x0 = hotbarPos.x;
     y0 = hotbarPos.y;
   } else {
-    x0 = Math.round(canvas.width / 2 - totalW / 2);
-    y0 = Math.round(canvas.height - box - 12);
+    const isMobile = !!(typeof window !== "undefined" && window.__MC_MOBILE);
+
+    if (isMobile) {
+      // Mobile default: flush bottom-right.
+      x0 = Math.round(canvas.width - totalW - 12);
+      y0 = Math.round(canvas.height - box - 8);
+    } else {
+      x0 = Math.round(canvas.width / 2 - totalW / 2);
+      y0 = Math.round(canvas.height - box - 12);
+    }
   }
   return { x0, y0, box, gap, totalW };
 }
@@ -6177,12 +6185,25 @@ function getHudLayout() {
     x = hudPos.x;
     y = hudPos.y;
   } else {
-    // Default position: centered above the hotbar.
-    const hotbarBoxH = 44; // must match drawHotbar()
-    const hotbarPadBottom = 12; // must match drawHotbar()
-    const hudClearance = hotbarBoxH + hotbarPadBottom + 10;
-    x = canvas.width / 2 - w / 2;
-    y = Math.max(14, canvas.height - (hpH + xpH + padding * 3) - hudClearance);
+    const isMobile = !!(typeof window !== "undefined" && window.__MC_MOBILE);
+
+    if (isMobile) {
+      // Mobile default: HP/XP centered on the bottom (not above the hotbar).
+      x = Math.round(canvas.width / 2 - w / 2);
+
+      const hudH = (hpH + xpH + padding * 3);
+      y = Math.round(canvas.height - hudH - 8);
+
+      // Clamp to keep it on-screen.
+      y = Math.max(6, Math.min(y, canvas.height - hudH - 2));
+    } else {
+      // Desktop default: centered above the hotbar.
+      const hotbarBoxH = 44; // must match drawHotbar()
+      const hotbarPadBottom = 12; // must match drawHotbar()
+      const hudClearance = hotbarBoxH + hotbarPadBottom + 10;
+      x = canvas.width / 2 - w / 2;
+      y = Math.max(14, canvas.height - (hpH + xpH + padding * 3) - hudClearance);
+    }
   }
 
   return { x, y, w, hpH, xpH, padding };

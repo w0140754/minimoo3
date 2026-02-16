@@ -8,7 +8,7 @@
   // - Limits horizontal fill to 92% of usable width to avoid edge overlap (adjustable).
   // - Tries harder to keep the hamburger/menu button above the canvas via CSS + JS.
 
-  const MC_VERSION = "v17-actionzone-fix";
+  const MC_VERSION = "v16-debug";
 
   function isProbablyMobile() {
     const hasTouch =
@@ -24,9 +24,6 @@
   }
 
   if (!isProbablyMobile()) return;
-
-  // Let the game code know we are running in the mobile/PWA layout.
-  window.__MC_MOBILE = true;
 
   function getCanvas() {
     return document.getElementById("c");
@@ -75,11 +72,10 @@
       overflow: hidden;
       overscroll-behavior: none;
       touch-action: manipulation;
-      background: #000;
-      -webkit-touch-callout: none;
       -webkit-user-select: none;
       user-select: none;
-      -webkit-tap-highlight-color: transparent;
+      -webkit-touch-callout: none;
+      background: #000;
     }
 
     /* Hide simple desktop text headers if present */
@@ -87,12 +83,11 @@
       display: none !important;
     }
 
-
-    #gameWrap, #c, .mc-touch-zone, .mc-action-zone, button, .main-menu, .main-menu-item {
-      -webkit-touch-callout: none;
+    /* Prevent long-press selection/copy UI */
+    html, body, #gameWrap, #gameCanvas, canvas, .mc-touch-zone {
       -webkit-user-select: none;
       user-select: none;
-      -webkit-tap-highlight-color: transparent;
+      -webkit-touch-callout: none;
     }
 
     #gameWrap {
@@ -129,21 +124,8 @@
       position: fixed;
       left: 0;
       top: 0;
-      width: 30vw;
+      width: 20vw;
       height: 100vh;
-      z-index: 2147483000;
-      touch-action: none;
-      background: transparent;
-    }
-
-    .mc-action-zone {
-      position: fixed;
-      right: 0;
-      /* Leave the top-right corner free for hamburger/menu taps */
-      top: calc(env(safe-area-inset-top) + 70px);
-      height: calc(100vh - (env(safe-area-inset-top) + 70px));
-      width: 25vw; /* right-side tap zone width */
-      /* Must be above the canvas but below any menu buttons */
       z-index: 2147483000;
       touch-action: none;
       background: transparent;
@@ -167,18 +149,6 @@
     .mc-rotate-overlay strong { font-size: 22px; display:block; margin-bottom: 8px; }
   `;
   document.head.appendChild(style);
-
-  // Prevent long-press text selection / callouts (iOS copy/translate menu)
-  const blockCallout = (e) => {
-    const t = e.target;
-    const wrap = document.getElementById("gameWrap");
-    if (wrap && t && wrap.contains(t)) {
-      e.preventDefault();
-    }
-  };
-  document.addEventListener("contextmenu", blockCallout, { passive: false });
-  document.addEventListener("selectstart", blockCallout, { passive: false });
-
 
   // Ensure wrapper exists and owns the canvas.
   function ensureWrap() {
@@ -304,26 +274,7 @@
   // ===== Virtual joystick (single instance, no accumulation) =====
   const touchZone = document.createElement("div");
   touchZone.className = "mc-touch-zone";
-  const TOUCH_ZONE_VW = 30; // % of screen width reserved for joystick zone
-  touchZone.style.width = `${TOUCH_ZONE_VW}vw`;
   document.body.appendChild(touchZone);
-
-  // ===== Right-side ACTION zone =====
-  // Design goal: no visible button.
-  // Tapping the right side triggers a context action:
-  //   - If standing on a portal: travel
-  //   - Else if near an NPC: interact
-  //   - Else: basic attack forward (current facing)
-  // This is implemented as a transparent DOM overlay so it doesn't affect desktop.
-  const ACTION_ZONE_VW = 25; // % of screen width (25vw) reserved for ACTION/ATTACK
-  const ACTION_ZONE_TOP_PX = 70; // leave room for hamburger/menu at top
-  const actionZone = document.createElement("div");
-  actionZone.className = "mc-action-zone";
-  actionZone.style.width = `${ACTION_ZONE_VW}vw`;
-  actionZone.style.top = `calc(env(safe-area-inset-top) + ${ACTION_ZONE_TOP_PX}px)`;
-  actionZone.style.height = `calc(100vh - (env(safe-area-inset-top) + ${ACTION_ZONE_TOP_PX}px))`;
-  actionZone.style.zIndex = "2147483000";
-  document.body.appendChild(actionZone);
 
   const joy = document.createElement("div");
   const knob = document.createElement("div");
@@ -360,33 +311,6 @@
   let startX = 0,
     startY = 0;
   let currentDirs = new Set();
-
-  // ===== Context awareness (avoid stealing taps from UI overlays) =====
-  function isMainMenuOpenNow() {
-    const mm = document.getElementById("mainMenu");
-    return !!(mm && mm.classList && mm.classList.contains("open"));
-  }
-
-  // These are declared in index.html with `let ...Open = false;`.
-  // We must reference them defensively so this file can run before index.html loads.
-  function isAnyCanvasUiOpenNow() {
-    try {
-      const inv = (typeof inventoryOpen !== "undefined") && !!inventoryOpen;
-      const skl = (typeof skillsOpen !== "undefined") && !!skillsOpen;
-      const book = (typeof monsterBookOpen !== "undefined") && !!monsterBookOpen;
-      const ed = (typeof editorOpen !== "undefined") && !!editorOpen;
-      return inv || skl || book || ed;
-    } catch (_) {
-      return false;
-    }
-  }
-
-  function updateActionZoneEnabled() {
-    // When an in-canvas UI is open (inventory/skills/book/editor) or the hamburger menu is open,
-    // let taps go through to the canvas so players can click UI elements.
-    const block = isMainMenuOpenNow() || isAnyCanvasUiOpenNow();
-    actionZone.style.pointerEvents = block ? "none" : "auto";
-  }
 
   function dispatchKey(type, key) {
     const ev = new KeyboardEvent(type, { key, bubbles: true });
@@ -503,134 +427,9 @@
     { passive: false }
   );
 
-  // ===== Right-side ACTION (tap to interact / attack-forward) =====
-  let actionActive = false;
-  let actionRepeatInterval = null;
-  let actionHoldTimeout = null;
-
-  function stopActionRepeat() {
-    actionActive = false;
-    if (actionHoldTimeout) {
-      clearTimeout(actionHoldTimeout);
-      actionHoldTimeout = null;
-    }
-    if (actionRepeatInterval) {
-      clearInterval(actionRepeatInterval);
-      actionRepeatInterval = null;
-    }
-  }
-
-  function doContextActionOnce() {
-    // Portal takes priority.
-    try {
-      if (typeof isOnPortal === "function" && isOnPortal()) {
-        if (typeof startPortalFade === "function") startPortalFade();
-        else {
-          // Fallback to E key (will call portal/interact handlers in your game)
-          dispatchKey("keydown", "e");
-          dispatchKey("keyup", "e");
-        }
-        return "portal";
-      }
-    } catch (_) {}
-
-    // NPC interaction next.
-    try {
-      if (typeof computeNearestNpc === "function") {
-        const near = computeNearestNpc();
-        if (near) {
-          if (typeof tryInteract === "function") tryInteract();
-          else {
-            dispatchKey("keydown", "e");
-            dispatchKey("keyup", "e");
-          }
-          return "npc";
-        }
-      }
-    } catch (_) {}
-
-    // Otherwise: basic attack forward (uses current facing on the server).
-    try {
-      if (typeof sendAttack === "function") {
-        sendAttack();
-        return "attack";
-      }
-    } catch (_) {}
-
-    return "none";
-  }
-
-  actionZone.addEventListener(
-    "pointerdown",
-    (e) => {
-      if (!isLandscapeNow()) return;
-
-      // If UI is open, this zone should be disabled (pointer-events: none),
-      // but keep this guard just in case.
-      updateActionZoneEnabled();
-      if (actionZone.style.pointerEvents === "none") return;
-
-      e.preventDefault();
-
-      const kind = doContextActionOnce();
-      if (kind !== "attack") {
-        stopActionRepeat();
-        return;
-      }
-
-      // Optional QoL: hold-to-attack. We only start repeating if the finger is held briefly.
-      actionActive = true;
-      if (typeof e.pointerId === "number" && actionZone.setPointerCapture) {
-        try { actionZone.setPointerCapture(e.pointerId); } catch (_) {}
-      }
-
-      actionHoldTimeout = setTimeout(() => {
-        if (!actionActive) return;
-        if (actionRepeatInterval) return;
-        actionRepeatInterval = setInterval(() => {
-          if (!actionActive) return;
-          try {
-            if (typeof sendAttack === "function") sendAttack();
-          } catch (_) {}
-        }, 90);
-      }, 260);
-    },
-    { passive: false }
-  );
-
-  actionZone.addEventListener(
-    "pointerup",
-    (e) => {
-      e.preventDefault();
-      stopActionRepeat();
-      if (typeof e.pointerId === "number" && actionZone.releasePointerCapture) {
-        try { actionZone.releasePointerCapture(e.pointerId); } catch (_) {}
-      }
-    },
-    { passive: false }
-  );
-
-  actionZone.addEventListener(
-    "pointercancel",
-    (e) => {
-      e.preventDefault();
-      stopActionRepeat();
-      if (typeof e.pointerId === "number" && actionZone.releasePointerCapture) {
-        try { actionZone.releasePointerCapture(e.pointerId); } catch (_) {}
-      }
-    },
-    { passive: false }
-  );
-
-  window.addEventListener("blur", () => {
-    onEnd(undefined);
-    stopActionRepeat();
-  });
+  window.addEventListener("blur", () => onEnd(undefined));
   document.addEventListener("visibilitychange", () => {
-    if (document.hidden) {
-      onEnd(undefined);
-      stopActionRepeat();
-    }
+    if (document.hidden) onEnd(undefined);
   });
 
   // ===== Orientation handling =====
@@ -640,16 +439,12 @@
 
     if (!landscape) {
       onEnd(undefined);
-      stopActionRepeat();
       touchZone.style.display = "none";
-      actionZone.style.display = "none";
     } else {
       touchZone.style.display = "block";
-      actionZone.style.display = "block";
       resizeCanvasInternal();
       scheduleResizes();
       setTimeout(elevateHamburger, 0);
-      updateActionZoneEnabled();
     }
   }
 
@@ -683,10 +478,5 @@
   // Initial
   attachCanvasObservers();
   applyOrientationMode();
-  // Inventory/skills/book are drawn inside the canvas and toggle via globals,
-  // so we poll lightly to disable the action zone while UI is open.
-  setInterval(() => {
-    if (isLandscapeNow()) updateActionZoneEnabled();
-  }, 180);
   scheduleResizes();
 })();
