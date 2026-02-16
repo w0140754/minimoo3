@@ -894,9 +894,6 @@ function createDefaultInventory() {
 
   // Starter items go in the Equipment tab by default.
   slots[0] = { id: "branch_sword", qty: 1 };
-  slots[1] = { id: "lucky_charm", qty: 1 };
-  slots[2] = { id: "bone_sword", qty: 1 };
-  slots[3] = { id: "trident_spear", qty: 1 };
 
   return { size: INV_TOTAL_SLOTS, slots };
 }
