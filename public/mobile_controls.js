@@ -1,14 +1,14 @@
 (() => {
   "use strict";
 
-  // ===== Mobile Controls (v16.1 debug) =====
+  // ===== Mobile Controls (v16 debug) =====
   // Changes vs prior:
-  // - Adds an on-screen "MC v16.1" badge so you can confirm you actually loaded this file.
+  // - Adds an on-screen "MC v16" badge so you can confirm you actually loaded this file.
   // - Uses iPhone safe-area insets for sizing.
   // - Limits horizontal fill to 92% of usable width to avoid edge overlap (adjustable).
   // - Tries harder to keep the hamburger/menu button above the canvas via CSS + JS.
 
-  const MC_VERSION = "v16.1-debug";
+  const MC_VERSION = "v16-debug";
 
   function isProbablyMobile() {
     const hasTouch =
@@ -25,53 +25,19 @@
 
   if (!isProbablyMobile()) return;
 
-  function isStandalone() {
-    // iOS: navigator.standalone; modern: display-mode media query
-    return (typeof navigator !== "undefined" && navigator.standalone) ||
-      (window.matchMedia && window.matchMedia("(display-mode: standalone)").matches) ||
-      (document.referrer && document.referrer.startsWith("android-app://"));
-  }
-
   function getCanvas() {
     return document.getElementById("c");
   }
 
-  function isStandalone() {
-    return (window.matchMedia && window.matchMedia("(display-mode: standalone)").matches) ||
-           (window.navigator && window.navigator.standalone === true);
-  }
-
   function getVP() {
-    const doc = document.documentElement;
-    const candidates = [];
-
-    if (doc && doc.clientWidth && doc.clientHeight) candidates.push([doc.clientWidth, doc.clientHeight]);
-    if (window.innerWidth && window.innerHeight) candidates.push([window.innerWidth, window.innerHeight]);
-
     const vv = window.visualViewport;
-    if (!isStandalone() && vv && vv.width && vv.height) candidates.push([vv.width, vv.height]);
-
-    if (window.screen && screen.width && screen.height) {
-      candidates.push([screen.width, screen.height]);
-      candidates.push([screen.height, screen.width]);
+    if (vv && vv.width && vv.height) {
+      return {
+        w: Math.max(1, Math.round(vv.width)),
+        h: Math.max(1, Math.round(vv.height)),
+      };
     }
-
-    let best = candidates[0] || [1, 1];
-    let bestArea = best[0] * best[1];
-
-    for (const [w0, h0] of candidates) {
-      const w = Math.max(1, Math.round(w0));
-      const h = Math.max(1, Math.round(h0));
-      const area = w * h;
-      if (area > bestArea) {
-        best = [w, h];
-        bestArea = area;
-      }
-    }
-    return { w: best[0], h: best[1] };
-  }
-    }
-    return { w: iw, h: ih };
+    return { w: Math.max(1, window.innerWidth), h: Math.max(1, window.innerHeight) };
   }
 
   function getSafeInsets() {
@@ -87,20 +53,6 @@
       left: toPx(cs.getPropertyValue("--mc-safe-left")),
     };
   }
-
-  // Debounced resize to avoid resize loops that can look like a freeze.
-  let __mc_resizeQueued = false;
-  function requestResize() {
-    if (__mc_resizeQueued) return;
-    __mc_resizeQueued = true;
-    requestAnimationFrame(() => {
-      __mc_resizeQueued = false;
-      try {
-        applyOrientationMode();
-      } catch (_) {}
-    });
-  }
-
 
   // ===== CSS / layout =====
   const style = document.createElement("style");
@@ -162,7 +114,7 @@
       position: fixed;
       left: 0;
       top: 0;
-      width: 25vw;
+      width: 20vw;
       height: 100vh;
       z-index: 2147483000;
       touch-action: none;
@@ -185,21 +137,7 @@
       line-height: 1.35;
     }
     .mc-rotate-overlay strong { font-size: 22px; display:block; margin-bottom: 8px; }
-  
-    .mc-debug-badge{
-      position: fixed;
-      left: calc(env(safe-area-inset-left) + 10px);
-      top: calc(env(safe-area-inset-top) + 10px);
-      z-index: 2147483647;
-      background: rgba(0,0,0,0.6);
-      color: #fff;
-      padding: 6px 8px;
-      border-radius: 10px;
-      font: 12px/1.25 system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
-      pointer-events: none;
-      white-space: pre;
-    }
-`;
+  `;
   document.head.appendChild(style);
 
   // Ensure wrapper exists and owns the canvas.
@@ -294,23 +232,8 @@
     if (canvas.height !== internalH) canvas.height = internalH;
 
     // Scale to fit within safe area, with a little horizontal margin.
-    // Scale strategy:
-    // Use the full safe-area height (so the game is not vertically letterboxed),
-    // then (if needed) reduce the internal width (horizontal FOV) so it fits within the desired horizontal fill.
-    const scaleH = usableH / internalH; // fill height
-    const maxDispW = usableW * HORIZONTAL_FILL;
-    const maxInternalWAtFullHeight = Math.floor(maxDispW / scaleH);
-
-    const adjustedInternalW = Math.max(
-      MIN_MOBILE_W,
-      Math.min(internalW, maxInternalWAtFullHeight)
-    );
-
-    // If we adjusted internal width, apply it so camera math matches what the player actually sees.
-    if (canvas.width !== adjustedInternalW) canvas.width = adjustedInternalW;
-
-    const scale = scaleH;
-    const dispW = Math.round(adjustedInternalW * scale);
+    const scale = Math.min((usableW * HORIZONTAL_FILL) / internalW, usableH / internalH);
+    const dispW = Math.round(internalW * scale);
     const dispH = Math.round(internalH * scale);
 
     canvas.style.width = dispW + "px";
@@ -337,13 +260,6 @@
   rotateOverlay.className = "mc-rotate-overlay";
   rotateOverlay.innerHTML = `<div><strong>Rotate your phone</strong>This game is landscape-only.</div>`;
   document.body.appendChild(rotateOverlay);
-
-  // Debug badge (temporary): confirms viewport math in standalone vs browser
-  const __mcBadge = document.createElement("div");
-  __mcBadge.className = "mc-debug-badge";
-  __mcBadge.textContent = "MC v21-debug";
-  document.body.appendChild(__mcBadge);
-
 
   // ===== Virtual joystick (single instance, no accumulation) =====
   const touchZone = document.createElement("div");
@@ -506,20 +422,6 @@
     if (document.hidden) onEnd(undefined);
   });
 
-
-  function stabilizeResize() {
-    // During iOS rotation (especially in standalone), viewport values change over a short period.
-    // Re-apply sizing a few times to settle.
-    let n = 0;
-    const maxN = 20;
-    const tick = () => {
-      n++;
-      applyOrientationMode();
-      if (n < maxN) requestAnimationFrame(tick);
-    };
-    requestAnimationFrame(tick);
-  }
-
   // ===== Orientation handling =====
   function applyOrientationMode() {
     const landscape = isLandscapeNow();
@@ -536,12 +438,10 @@
     }
   }
 
-  window.addEventListener("resize", requestResize, { passive: true });
-  window.addEventListener("orientationchange", stabilizeResize, { passive: true });
-  window.addEventListener("pageshow", stabilizeResize, { passive: true });
-  window.addEventListener("focus", stabilizeResize, { passive: true });
+  window.addEventListener("resize", applyOrientationMode, { passive: true });
+  window.addEventListener("orientationchange", applyOrientationMode, { passive: true });
   if (window.visualViewport) {
-    window.visualViewport.addEventListener("resize", requestResize, { passive: true });
+    window.visualViewport.addEventListener("resize", applyOrientationMode, { passive: true });
   }
 
   // If the game code changes canvas attributes later, re-apply sizing.
@@ -550,7 +450,7 @@
     if (!canvas) return;
 
     const mo = new MutationObserver(() => {
-      if (isLandscapeNow()) requestResize();
+      if (isLandscapeNow()) resizeCanvasInternal();
     });
     mo.observe(canvas, { attributes: true, attributeFilter: ["width", "height", "style"] });
   }
