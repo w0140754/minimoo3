@@ -134,10 +134,19 @@
     if (canvas.width !== BASE_W) canvas.width = BASE_W;
     if (canvas.height !== BASE_H) canvas.height = BASE_H;
 
-    const vp = getVP();
-    const scale = Math.min(vp.w / BASE_W, vp.h / BASE_H);
-    const dispW = Math.round(BASE_W * scale);
-    const dispH = Math.round(BASE_H * scale);
+	const vp = getVP();
+
+	// Fit-to-screen scale (what you already had)
+	const fitScale = Math.min(vp.w / BASE_W, vp.h / BASE_H);
+
+	// Zoom in (fewer tiles visible)
+	const MOBILE_ZOOM = 4 / 3; // 1.333...  (10.5x12.5 -> 7.875x9.375)
+
+	const scale = fitScale * MOBILE_ZOOM;
+
+	const dispW = Math.round(BASE_W * scale);
+	const dispH = Math.round(BASE_H * scale);
+
 
     // Centered via CSS (left/top 50% + translate). Just set size.
     canvas.style.width = dispW + 'px';
