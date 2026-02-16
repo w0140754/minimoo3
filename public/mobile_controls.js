@@ -72,22 +72,15 @@
       overflow: hidden;
       overscroll-behavior: none;
       touch-action: manipulation;
+      background: #000;
+      -webkit-touch-callout: none;
       -webkit-user-select: none;
       user-select: none;
-      -webkit-touch-callout: none;
-      background: #000;
     }
 
     /* Hide simple desktop text headers if present */
     body > h1, body > p {
       display: none !important;
-    }
-
-    /* Prevent long-press selection/copy UI */
-    html, body, #gameWrap, #gameCanvas, canvas, .mc-touch-zone {
-      -webkit-user-select: none;
-      user-select: none;
-      -webkit-touch-callout: none;
     }
 
     #gameWrap {
@@ -100,6 +93,10 @@
       box-sizing: border-box;
       padding: var(--mc-safe-top) var(--mc-safe-right) var(--mc-safe-bottom) var(--mc-safe-left);
       z-index: 0;
+    
+      -webkit-user-select: none;
+      user-select: none;
+      -webkit-touch-callout: none;
     }
 
     #c {
@@ -124,9 +121,9 @@
       position: fixed;
       left: 0;
       top: 0;
-      width: 20vw;
+      width: 30vw;
       height: 100vh;
-      z-index: 2147483000;
+      z-index: 6;
       touch-action: none;
       background: transparent;
     }
@@ -147,7 +144,20 @@
       line-height: 1.35;
     }
     .mc-rotate-overlay strong { font-size: 22px; display:block; margin-bottom: 8px; }
-  `;
+  
+    .hud-btn, #mainMenu { z-index: 1000 !important; }
+
+    .mc-action-zone {
+      position: fixed;
+      right: 0;
+      top: calc(var(--mc-safe-top) + 70px);
+      height: calc(100vh - (var(--mc-safe-top) + 70px));
+      width: 25vw;
+      z-index: 5; /* above canvas (1), below hud buttons (1000) */
+      touch-action: none;
+      background: transparent;
+    }
+`;
   document.head.appendChild(style);
 
   // Ensure wrapper exists and owns the canvas.
