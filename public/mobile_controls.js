@@ -25,19 +25,36 @@
 
   if (!isProbablyMobile()) return;
 
+  function isStandalone() {
+    // iOS: navigator.standalone; modern: display-mode media query
+    return (typeof navigator !== "undefined" && navigator.standalone) ||
+      (window.matchMedia && window.matchMedia("(display-mode: standalone)").matches) ||
+      (document.referrer && document.referrer.startsWith("android-app://"));
+  }
+
   function getCanvas() {
     return document.getElementById("c");
   }
 
   function getVP() {
+    // iOS Home Screen / PWA can report odd visualViewport sizes during rotation.
+    // Prefer innerWidth/innerHeight in standalone mode, and fall back if vv looks suspicious.
+    const iw = Math.max(1, Math.round(window.innerWidth));
+    const ih = Math.max(1, Math.round(window.innerHeight));
+
     const vv = window.visualViewport;
-    if (vv && vv.width && vv.height) {
-      return {
-        w: Math.max(1, Math.round(vv.width)),
-        h: Math.max(1, Math.round(vv.height)),
-      };
+    if (!isStandalone() && vv && vv.width && vv.height) {
+      const vw = Math.max(1, Math.round(vv.width));
+      const vh = Math.max(1, Math.round(vv.height));
+
+      // If vv is wildly different from inner sizes, ignore it.
+      const dw = Math.abs(vw - iw);
+      const dh = Math.abs(vh - ih);
+      if (dw < Math.max(60, iw * 0.15) && dh < Math.max(60, ih * 0.15)) {
+        return { w: vw, h: vh };
+      }
     }
-    return { w: Math.max(1, window.innerWidth), h: Math.max(1, window.innerHeight) };
+    return { w: iw, h: ih };
   }
 
   function getSafeInsets() {
@@ -437,6 +454,20 @@
     if (document.hidden) onEnd(undefined);
   });
 
+
+  function stabilizeResize() {
+    // During iOS rotation (especially in standalone), viewport values change over a short period.
+    // Re-apply sizing a few times to settle.
+    let n = 0;
+    const maxN = 20;
+    const tick = () => {
+      n++;
+      applyOrientationMode();
+      if (n < maxN) requestAnimationFrame(tick);
+    };
+    requestAnimationFrame(tick);
+  }
+
   // ===== Orientation handling =====
   function applyOrientationMode() {
     const landscape = isLandscapeNow();
@@ -454,7 +485,9 @@
   }
 
   window.addEventListener("resize", applyOrientationMode, { passive: true });
-  window.addEventListener("orientationchange", applyOrientationMode, { passive: true });
+  window.addEventListener("orientationchange", stabilizeResize, { passive: true });
+  window.addEventListener("pageshow", stabilizeResize, { passive: true });
+  window.addEventListener("focus", stabilizeResize, { passive: true });
   if (window.visualViewport) {
     window.visualViewport.addEventListener("resize", applyOrientationMode, { passive: true });
   }
