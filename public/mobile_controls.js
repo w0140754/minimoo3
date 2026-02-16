@@ -1,14 +1,14 @@
 (() => {
   "use strict";
 
-  // ===== Mobile Controls (v16 debug) =====
+  // ===== Mobile Controls (v16.1 debug) =====
   // Changes vs prior:
-  // - Adds an on-screen "MC v16" badge so you can confirm you actually loaded this file.
+  // - Adds an on-screen "MC v16.1" badge so you can confirm you actually loaded this file.
   // - Uses iPhone safe-area insets for sizing.
   // - Limits horizontal fill to 92% of usable width to avoid edge overlap (adjustable).
   // - Tries harder to keep the hamburger/menu button above the canvas via CSS + JS.
 
-  const MC_VERSION = "v16-debug";
+  const MC_VERSION = "v16.1-debug";
 
   function isProbablyMobile() {
     const hasTouch =
@@ -114,7 +114,7 @@
       position: fixed;
       left: 0;
       top: 0;
-      width: 20vw;
+      width: 25vw;
       height: 100vh;
       z-index: 2147483000;
       touch-action: none;
@@ -232,8 +232,23 @@
     if (canvas.height !== internalH) canvas.height = internalH;
 
     // Scale to fit within safe area, with a little horizontal margin.
-    const scale = Math.min((usableW * HORIZONTAL_FILL) / internalW, usableH / internalH);
-    const dispW = Math.round(internalW * scale);
+    // Scale strategy:
+    // Use the full safe-area height (so the game is not vertically letterboxed),
+    // then (if needed) reduce the internal width (horizontal FOV) so it fits within the desired horizontal fill.
+    const scaleH = usableH / internalH; // fill height
+    const maxDispW = usableW * HORIZONTAL_FILL;
+    const maxInternalWAtFullHeight = Math.floor(maxDispW / scaleH);
+
+    const adjustedInternalW = Math.max(
+      MIN_MOBILE_W,
+      Math.min(internalW, maxInternalWAtFullHeight)
+    );
+
+    // If we adjusted internal width, apply it so camera math matches what the player actually sees.
+    if (canvas.width !== adjustedInternalW) canvas.width = adjustedInternalW;
+
+    const scale = scaleH;
+    const dispW = Math.round(adjustedInternalW * scale);
     const dispH = Math.round(internalH * scale);
 
     canvas.style.width = dispW + "px";
