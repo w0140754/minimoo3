@@ -114,7 +114,7 @@
       position: fixed;
       left: 0;
       top: 0;
-      width: 25vw;
+      width: 30vw;
       height: 100vh;
       z-index: 2147483000;
       touch-action: none;
@@ -169,15 +169,26 @@
   // User requested: 3/2 zoom => 1.5x bigger tiles / less world visible.
   const MOBILE_ZOOM = 3 / 2;
 
-  // Keep vertical zoom fixed
+  // Keep vertical zoom fixed.
+  // We will always scale the *display* to fill the usable height.
+  // Then we choose an internal width that preserves left/right margins
+  // (camera-notch safety) instead of shrinking the whole game and
+  // creating top/bottom letterboxing.
   const MOBILE_H = Math.round(BASE_H / MOBILE_ZOOM); // ~400
-  const MIN_MOBILE_W = Math.round(BASE_W / MOBILE_ZOOM); // ~533
+
+  // Minimum internal width. If this is too high, some devices will be
+  // forced to scale down by width, leaving unused vertical space.
+  // Lowering this lets us keep full-height display while simply showing
+  // less horizontal world on narrower landscape phones.
+  const MIN_MOBILE_W = 420;
 
   // Expand horizontal view to use wide screens, but cap it
-  const MAX_INTERNAL_W = 900;
+  const MAX_INTERNAL_W = 960;
 
   // Fill a bit less than full usable width to avoid edge overlap (adjustable)
-  const HORIZONTAL_FILL = 0.92; // try 0.90 if you want more margin
+  // How much of the safe usable width we allow the *canvas* to occupy.
+  // Lower = bigger left/right margins (safer around camera cutouts).
+  const HORIZONTAL_FILL = 0.90;
 
   function elevateHamburger() {
     // If the game creates the hamburger dynamically, try to find and raise it.
@@ -222,17 +233,25 @@
     const usableW = Math.max(1, vp.w - safe.left - safe.right);
     const usableH = Math.max(1, vp.h - safe.top - safe.bottom);
 
-    // Match internal width to phone aspect ratio (within caps), keeping vertical zoom fixed.
-    const desiredW = Math.round(MOBILE_H * (usableW / usableH));
-    const internalW = Math.max(MIN_MOBILE_W, Math.min(desiredW, MAX_INTERNAL_W));
+    // Goal:
+    // 1) Fill usable height (no top/bottom letterboxing)
+    // 2) Keep some empty space on the left/right (avoid camera notch overlap)
+    //
+    // We do that by fixing internalH, scaling to fill height, then picking
+    // an internalW that will render to <= usableW * HORIZONTAL_FILL.
     const internalH = MOBILE_H;
+    const scaleToFillH = usableH / internalH;
+    const targetInternalW = Math.round((usableW * HORIZONTAL_FILL) / scaleToFillH);
+    const internalW = Math.max(MIN_MOBILE_W, Math.min(targetInternalW, MAX_INTERNAL_W));
 
     // Force internal resolution (THIS is what the camera uses).
     if (canvas.width !== internalW) canvas.width = internalW;
     if (canvas.height !== internalH) canvas.height = internalH;
 
-    // Scale to fit within safe area, with a little horizontal margin.
-    const scale = Math.min((usableW * HORIZONTAL_FILL) / internalW, usableH / internalH);
+    // Scale to fill height.
+    // (If internalW hits MAX_INTERNAL_W, it's still possible to be width-limited on
+    // ultra-wide devices; in that case we gracefully fall back to the min() behavior.)
+    const scale = Math.min(usableH / internalH, (usableW * HORIZONTAL_FILL) / internalW);
     const dispW = Math.round(internalW * scale);
     const dispH = Math.round(internalH * scale);
 
