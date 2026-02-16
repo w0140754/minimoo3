@@ -1,13 +1,10 @@
-<!doctype html>
+<!DOCTYPE html>
+
 <html>
 <head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
-  <meta name="apple-mobile-web-app-capable" content="yes" />
-  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
-  <meta name="apple-mobile-web-app-title" content="Mini MMO" />
-  <title>Mini MMO</title>
-  <style>
+<meta charset="utf-8"/>
+<title>Mini MMO</title>
+<style>
     body { background:#222; color:#ddd; font-family: system-ui, sans-serif; }
     canvas { border: 1px solid #555; image-rendering: pixelated; }
   
@@ -81,23 +78,22 @@
 }
 
   </style>
-</head>
+<meta content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no" name="viewport"/><meta content="#000000" name="theme-color"/><meta content="yes" name="apple-mobile-web-app-capable"/><meta content="black-translucent" name="apple-mobile-web-app-status-bar-style"/><meta content="Mini MMO" name="apple-mobile-web-app-title"/><link href="/manifest.webmanifest" rel="manifest"/><link href="/icons/icon-180.png" rel="apple-touch-icon"/></head>
 <body>
-  <h1>Mini MMO</h1>
-  <p>WASD / Arrow keys • Press <b>E</b> near NPC / portal • Left-click to attack • Press <b>I</b> (or ☰) for inventory • Press <b>K</b> for skills</p>
-  <div id="gameWrap" class="game-wrap">
-    <button id="invBtn" class="hud-btn" type="button" aria-label="Open inventory (I)" aria-expanded="false">☰</button>
-    <div id="mainMenu" class="main-menu" role="menu" aria-label="Game menu">
-      <button class="main-menu-item" type="button" data-action="items" role="menuitem">Items <span class="hint">I</span></button>
-      <button class="main-menu-item" type="button" data-action="skills" role="menuitem">Skills <span class="hint">K</span></button>
-      <button class="main-menu-item" type="button" data-action="book" role="menuitem">Monster Book <span class="hint">B</span></button>
-      <button class="main-menu-item disabled" type="button" data-action="quests" role="menuitem" aria-disabled="true" disabled>Quests <span class="hint">Soon</span></button>
-      <button class="main-menu-item disabled" type="button" data-action="settings" role="menuitem" aria-disabled="true" disabled>Settings <span class="hint">Soon</span></button>
-    </div>
-    <canvas id="c" width="800" height="600"></canvas>
-  </div>
-
-<script>
+<h1>Mini MMO</h1>
+<p>WASD / Arrow keys • Press <b>E</b> near NPC / portal • Left-click to attack • Press <b>I</b> (or ☰) for inventory • Press <b>K</b> for skills</p>
+<div class="game-wrap" id="gameWrap">
+<button aria-expanded="false" aria-label="Open inventory (I)" class="hud-btn" id="invBtn" type="button">☰</button>
+<div aria-label="Game menu" class="main-menu" id="mainMenu" role="menu">
+<button class="main-menu-item" data-action="items" role="menuitem" type="button">Items <span class="hint">I</span></button>
+<button class="main-menu-item" data-action="skills" role="menuitem" type="button">Skills <span class="hint">K</span></button>
+<button class="main-menu-item" data-action="book" role="menuitem" type="button">Monster Book <span class="hint">B</span></button>
+<button aria-disabled="true" class="main-menu-item disabled" data-action="quests" disabled="" role="menuitem" type="button">Quests <span class="hint">Soon</span></button>
+<button aria-disabled="true" class="main-menu-item disabled" data-action="settings" disabled="" role="menuitem" type="button">Settings <span class="hint">Soon</span></button>
+</div>
+<canvas height="600" id="c" width="800"></canvas>
+</div>
+<script src="/mobile_controls.js?v=25"></script><script>
 "use strict";
 
 /* ==========================================================
@@ -7905,6 +7901,11 @@ const weaponBehind = (renderDir === DIR.UP) && (weapon === "sword" || weapon ===
 
 requestAnimationFrame(loop);
 </script>
-  <script src="/mobile_controls.js?v=pwa20"></script>
-</body>
+<script>
+    if ('serviceWorker' in navigator) {
+      window.addEventListener('load', () => {
+        navigator.serviceWorker.register('/sw.js').catch(() => {});
+      });
+    }
+    </script></body>
 </html>

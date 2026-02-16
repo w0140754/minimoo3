@@ -36,23 +36,40 @@
     return document.getElementById("c");
   }
 
+  function isStandalone() {
+    return (window.matchMedia && window.matchMedia("(display-mode: standalone)").matches) ||
+           (window.navigator && window.navigator.standalone === true);
+  }
+
   function getVP() {
-    // iOS Home Screen / PWA can report odd visualViewport sizes during rotation.
-    // Prefer innerWidth/innerHeight in standalone mode, and fall back if vv looks suspicious.
-    const iw = Math.max(1, Math.round(window.innerWidth));
-    const ih = Math.max(1, Math.round(window.innerHeight));
+    const doc = document.documentElement;
+    const candidates = [];
+
+    if (doc && doc.clientWidth && doc.clientHeight) candidates.push([doc.clientWidth, doc.clientHeight]);
+    if (window.innerWidth && window.innerHeight) candidates.push([window.innerWidth, window.innerHeight]);
 
     const vv = window.visualViewport;
-    if (!isStandalone() && vv && vv.width && vv.height) {
-      const vw = Math.max(1, Math.round(vv.width));
-      const vh = Math.max(1, Math.round(vv.height));
+    if (!isStandalone() && vv && vv.width && vv.height) candidates.push([vv.width, vv.height]);
 
-      // If vv is wildly different from inner sizes, ignore it.
-      const dw = Math.abs(vw - iw);
-      const dh = Math.abs(vh - ih);
-      if (dw < Math.max(60, iw * 0.15) && dh < Math.max(60, ih * 0.15)) {
-        return { w: vw, h: vh };
+    if (window.screen && screen.width && screen.height) {
+      candidates.push([screen.width, screen.height]);
+      candidates.push([screen.height, screen.width]);
+    }
+
+    let best = candidates[0] || [1, 1];
+    let bestArea = best[0] * best[1];
+
+    for (const [w0, h0] of candidates) {
+      const w = Math.max(1, Math.round(w0));
+      const h = Math.max(1, Math.round(h0));
+      const area = w * h;
+      if (area > bestArea) {
+        best = [w, h];
+        bestArea = area;
       }
+    }
+    return { w: best[0], h: best[1] };
+  }
     }
     return { w: iw, h: ih };
   }
@@ -70,6 +87,20 @@
       left: toPx(cs.getPropertyValue("--mc-safe-left")),
     };
   }
+
+  // Debounced resize to avoid resize loops that can look like a freeze.
+  let __mc_resizeQueued = false;
+  function requestResize() {
+    if (__mc_resizeQueued) return;
+    __mc_resizeQueued = true;
+    requestAnimationFrame(() => {
+      __mc_resizeQueued = false;
+      try {
+        applyOrientationMode();
+      } catch (_) {}
+    });
+  }
+
 
   // ===== CSS / layout =====
   const style = document.createElement("style");
@@ -154,7 +185,21 @@
       line-height: 1.35;
     }
     .mc-rotate-overlay strong { font-size: 22px; display:block; margin-bottom: 8px; }
-  `;
+  
+    .mc-debug-badge{
+      position: fixed;
+      left: calc(env(safe-area-inset-left) + 10px);
+      top: calc(env(safe-area-inset-top) + 10px);
+      z-index: 2147483647;
+      background: rgba(0,0,0,0.6);
+      color: #fff;
+      padding: 6px 8px;
+      border-radius: 10px;
+      font: 12px/1.25 system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+      pointer-events: none;
+      white-space: pre;
+    }
+`;
   document.head.appendChild(style);
 
   // Ensure wrapper exists and owns the canvas.
@@ -292,6 +337,13 @@
   rotateOverlay.className = "mc-rotate-overlay";
   rotateOverlay.innerHTML = `<div><strong>Rotate your phone</strong>This game is landscape-only.</div>`;
   document.body.appendChild(rotateOverlay);
+
+  // Debug badge (temporary): confirms viewport math in standalone vs browser
+  const __mcBadge = document.createElement("div");
+  __mcBadge.className = "mc-debug-badge";
+  __mcBadge.textContent = "MC v21-debug";
+  document.body.appendChild(__mcBadge);
+
 
   // ===== Virtual joystick (single instance, no accumulation) =====
   const touchZone = document.createElement("div");
@@ -484,12 +536,12 @@
     }
   }
 
-  window.addEventListener("resize", applyOrientationMode, { passive: true });
+  window.addEventListener("resize", requestResize, { passive: true });
   window.addEventListener("orientationchange", stabilizeResize, { passive: true });
   window.addEventListener("pageshow", stabilizeResize, { passive: true });
   window.addEventListener("focus", stabilizeResize, { passive: true });
   if (window.visualViewport) {
-    window.visualViewport.addEventListener("resize", applyOrientationMode, { passive: true });
+    window.visualViewport.addEventListener("resize", requestResize, { passive: true });
   }
 
   // If the game code changes canvas attributes later, re-apply sizing.
@@ -498,7 +550,7 @@
     if (!canvas) return;
 
     const mo = new MutationObserver(() => {
-      if (isLandscapeNow()) resizeCanvasInternal();
+      if (isLandscapeNow()) requestResize();
     });
     mo.observe(canvas, { attributes: true, attributeFilter: ["width", "height", "style"] });
   }
