@@ -192,7 +192,10 @@
     const times = [0, 50, 150, 300, 700, 1200];
     for (const t of times) {
       setTimeout(() => {
-        if (isLandscapeNow()) resizeCanvasInternal();
+        if (isLandscapeNow()) {
+          resizeCanvasInternal();
+          elevateHamburger();
+        }
       }, t);
     }
   }
@@ -359,6 +362,46 @@
     if (document.hidden) onEnd(undefined);
   });
 
+
+  function elevateHamburger() {
+    // Try to find the game's hamburger/menu button and ensure it's above the canvas on mobile.
+    // This is defensive because the game may create the button dynamically with different ids/classes.
+    const candidates = [];
+
+    // Common ids/classes
+    candidates.push(document.getElementById("menuBtn"));
+    candidates.push(document.getElementById("hamburger"));
+    candidates.push(document.getElementById("menu"));
+    candidates.push(document.querySelector(".hamburger"));
+    candidates.push(document.querySelector(".menu-btn"));
+    candidates.push(document.querySelector(".menuButton"));
+    candidates.push(document.querySelector("[aria-label*='menu' i]"));
+    candidates.push(document.querySelector("[aria-label*='hamburger' i]"));
+
+    // Button containing the ☰ character
+    for (const el of document.querySelectorAll("button, div, span, a")) {
+      const t = (el.textContent || "").trim();
+      if (t === "☰" || t === "≡") {
+        candidates.push(el);
+        break;
+      }
+    }
+
+    const btn = candidates.find(Boolean);
+    if (!btn) return;
+
+    const safe = getSafeInsets();
+    // Make sure it's visible and on top.
+    btn.style.zIndex = "2147483605";
+    // If it's not already fixed/absolute, pin it.
+    const pos = getComputedStyle(btn).position;
+    if (pos !== "fixed" && pos !== "absolute") {
+      btn.style.position = "fixed";
+      btn.style.left = Math.round(safe.left + 10) + "px";
+      btn.style.top = Math.round(safe.top + 10) + "px";
+    }
+  }
+
   // ===== Orientation handling =====
   function applyOrientationMode() {
     const landscape = isLandscapeNow();
@@ -371,6 +414,8 @@
       touchZone.style.display = "block";
       resizeCanvasInternal();
       scheduleResizes();
+      // Ensure menu button stays above the canvas.
+      setTimeout(elevateHamburger, 0);
     }
   }
 
