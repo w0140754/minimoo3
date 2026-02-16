@@ -140,7 +140,7 @@
 	const fitScale = Math.min(vp.w / BASE_W, vp.h / BASE_H);
 
 	// Zoom in (fewer tiles visible)
-	const MOBILE_ZOOM = 4 / 3; // 1.333...  (10.5x12.5 -> 7.875x9.375)
+	const MOBILE_ZOOM = 3 / 2; // 1.333...  (10.5x12.5 -> 7.875x9.375)
 
 	const scale = fitScale * MOBILE_ZOOM;
 
