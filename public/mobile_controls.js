@@ -135,6 +135,11 @@
   const MOBILE_W = Math.round(BASE_W / MOBILE_ZOOM); // ~533
   const MOBILE_H = Math.round(BASE_H / MOBILE_ZOOM); // 400
 
+  // Allow using more horizontal screen real estate on wide phones.
+  // This increases horizontal field-of-view (no stretching), while keeping the same vertical zoom.
+  // You can raise/lower this cap if you want more/less horizontal view.
+  const MAX_INTERNAL_W = 960;
+
   function resizeCanvasInternal() {
     const ctx = ensureWrap();
     if (!ctx) return;
@@ -143,10 +148,11 @@
     const vp = getVP();
 
     // Use smaller internal size on mobile landscape so camera follows correctly.
-    const internalW = MOBILE_W;
+    // Keep vertical zoom fixed, but expand horizontal view to better match the phone aspect ratio.
     const internalH = MOBILE_H;
-
-    // Force internal resolution (THIS is what the camera uses).
+    const desiredW = Math.round(internalH * (vp.w / vp.h));
+    const internalW = Math.max(MOBILE_W, Math.min(desiredW, MAX_INTERNAL_W));
+// Force internal resolution (THIS is what the camera uses).
     if (canvas.width !== internalW) canvas.width = internalW;
     if (canvas.height !== internalH) canvas.height = internalH;
 
