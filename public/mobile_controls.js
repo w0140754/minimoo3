@@ -30,6 +30,21 @@
     return { w: Math.max(1, window.innerWidth), h: Math.max(1, window.innerHeight) };
   }
 
+  function getSafeInsets() {
+    // Read CSS env(safe-area-inset-*) via computed vars.
+    const cs = getComputedStyle(document.documentElement);
+    const toPx = (v) => {
+      const n = parseFloat(String(v || '').replace('px',''));
+      return Number.isFinite(n) ? n : 0;
+    };
+    return {
+      top: toPx(cs.getPropertyValue('--mc-safe-top')),
+      right: toPx(cs.getPropertyValue('--mc-safe-right')),
+      bottom: toPx(cs.getPropertyValue('--mc-safe-bottom')),
+      left: toPx(cs.getPropertyValue('--mc-safe-left')),
+    };
+  }
+
   // ===== CSS / layout =====
   const style = document.createElement("style");
   style.textContent = `
@@ -56,6 +71,8 @@
       height: 100% !important;
       overflow: hidden !important;
       background: #000;
+      box-sizing: border-box;
+      padding: var(--mc-safe-top) var(--mc-safe-right) var(--mc-safe-bottom) var(--mc-safe-left);
     }
 
     #c {
@@ -146,18 +163,22 @@
     const { canvas } = ctx;
 
     const vp = getVP();
+    const safe = getSafeInsets();
+    const usableW = Math.max(1, vp.w - safe.left - safe.right);
+    const usableH = Math.max(1, vp.h - safe.top - safe.bottom);
 
     // Use smaller internal size on mobile landscape so camera follows correctly.
     // Keep vertical zoom fixed, but expand horizontal view to better match the phone aspect ratio.
     const internalH = MOBILE_H;
-    const desiredW = Math.round(internalH * (vp.w / vp.h));
+    const desiredW = Math.round(internalH * (usableW / usableH));
     const internalW = Math.max(MOBILE_W, Math.min(desiredW, MAX_INTERNAL_W));
-// Force internal resolution (THIS is what the camera uses).
+
+    // Force internal resolution (THIS is what the camera uses).
     if (canvas.width !== internalW) canvas.width = internalW;
     if (canvas.height !== internalH) canvas.height = internalH;
 
-    // Scale the smaller canvas up to fit the screen (uniform scale, no distortion).
-    const scale = Math.min(vp.w / internalW, vp.h / internalH);
+    // Scale the smaller canvas up to fit the safe-area (uniform scale, no distortion).
+    const scale = Math.min(usableW / internalW, usableH / internalH);
     const dispW = Math.round(internalW * scale);
     const dispH = Math.round(internalH * scale);
 
