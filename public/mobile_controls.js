@@ -104,6 +104,7 @@
     }
 
     /* Try to keep common menu/hamburger elements above the canvas */
+    #invBtn, #mainMenu,
     #menuBtn, #hamburger, #menu, .hamburger, .menu-btn, .menuButton,
     [aria-label*="menu" i], [aria-label*="hamburger" i] {
       z-index: 2147483605 !important;
@@ -219,6 +220,8 @@
   function elevateHamburger() {
     // If the game creates the hamburger dynamically, try to find and raise it.
     const candidates = [];
+    candidates.push(document.getElementById("invBtn"));
+    candidates.push(document.getElementById("mainMenu"));
     candidates.push(document.getElementById("menuBtn"));
     candidates.push(document.getElementById("hamburger"));
     candidates.push(document.getElementById("menu"));
@@ -516,6 +519,18 @@ const actionWrap = document.createElement("div");
 actionWrap.className = "mc-action-wrap";
 document.body.appendChild(actionWrap);
 
+function isMainMenuOpenDom() {
+  const mm = document.getElementById("mainMenu");
+  return !!(mm && mm.classList.contains("open"));
+}
+
+function syncActionInteractivity() {
+  // When the hamburger dropdown is open, make the action cluster non-interactive
+  // so it never blocks tapping menu items.
+  const open = isMainMenuOpenDom();
+  actionWrap.style.pointerEvents = open ? "none" : "auto";
+}
+
 function makeBtn(label, extraClass = "") {
   const b = document.createElement("div");
   b.className = `mc-action-btn ${extraClass}`.trim();
@@ -524,6 +539,20 @@ function makeBtn(label, extraClass = "") {
   b.setAttribute("aria-label", label || "attack");
   return b;
 }
+
+// Keep the action cluster from blocking hamburger-menu clicks.
+try {
+  const mm = document.getElementById("mainMenu");
+  if (mm) {
+    const mo = new MutationObserver(() => syncActionInteractivity());
+    mo.observe(mm, { attributes: true, attributeFilter: ["class", "style"] });
+  }
+} catch (_) {}
+
+// Fallback (in case the menu is created later)
+setInterval(() => {
+  try { syncActionInteractivity(); } catch (_) {}
+}, 250);
 
 const btnInteract = makeBtn("");
 btnInteract.setAttribute("aria-label", "Interact");
@@ -577,6 +606,7 @@ function getMyWorldPos() {
 }
 
 function doInteract() {
+  if (isMainMenuOpenDom()) return;
   try {
     if (typeof window.isOnPortal === "function" && window.isOnPortal()) {
       if (typeof window.startPortalFade === "function") { window.startPortalFade(); return; }
@@ -600,6 +630,7 @@ let holdActive = false;
 let holdDir = null;
 
 function startAttackDir(dx, dy) {
+  if (isMainMenuOpenDom()) return;
   const aim = aimWorldFromDir(dx, dy);
   if (!aim) return;
 
@@ -641,6 +672,7 @@ setInterval(tickHoldAim, 80);
 function bindPress(el, onDown, onUp) {
   el.addEventListener("pointerdown", (e) => {
     if (!isLandscapeNow()) return;
+    if (isMainMenuOpenDom()) return;
     e.preventDefault();
     e.stopPropagation();
     onDown(e);
