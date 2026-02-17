@@ -69,8 +69,8 @@ export function makeMapA() {
   },
   {
     "mobType": "orange",
-    "tx": 15,
-    "ty": 14,   "passiveUntilHit": true,
+    "tx": 18,
+    "ty": 16,   "passiveUntilHit": true,
   },
   {
     "mobType": "orange",
