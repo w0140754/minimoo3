@@ -8,7 +8,7 @@
   // - Limits horizontal fill to 92% of usable width to avoid edge overlap (adjustable).
   // - Tries harder to keep the hamburger/menu button above the canvas via CSS + JS.
 
-  const MC_VERSION = "v16-debug";
+  const MC_VERSION = "v17-actions";
 
   function isProbablyMobile() {
     const hasTouch =
@@ -114,12 +114,49 @@
       position: fixed;
       left: 0;
       top: 0;
-      width: 20vw;
+      width: 30vw;
       height: 100vh;
       z-index: 2147483000;
       touch-action: none;
       background: transparent;
     }
+
+
+.mc-action-wrap{
+  position: fixed;
+  z-index: 2147483592;
+  touch-action: none;
+  pointer-events: auto;
+  user-select: none;
+  -webkit-user-select: none;
+}
+.mc-action-btn{
+  width: 72px;
+  height: 72px;
+  border-radius: 999px;
+  background: rgba(255,255,255,0.06);
+  border: 2px solid rgba(255,255,255,0.14);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+  font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+  font-weight: 700;
+  font-size: 14px;
+  color: rgba(255,255,255,0.70);
+  -webkit-tap-highlight-color: transparent;
+}
+/* Very subtle by default (attack buttons) */
+.mc-action-btn.mc-ghost{
+  background: rgba(255,255,255,0.02);
+  border-color: rgba(255,255,255,0.04);
+  color: rgba(255,255,255,0.00);
+}
+.mc-action-btn:active{
+  background: rgba(255,255,255,0.14);
+  border-color: rgba(255,255,255,0.26);
+  color: rgba(255,255,255,0.92);
+}
 
     .mc-rotate-overlay {
       position: fixed;
@@ -276,6 +313,8 @@
       // ignore storage failures (private mode, etc.)
     }
 
+    try { positionActionCluster(); } catch (_) {}
+
     elevateHamburger();
   }
 
@@ -286,7 +325,9 @@
       setTimeout(() => {
         if (isLandscapeNow()) {
           resizeCanvasInternal();
-          elevateHamburger();
+          try { positionActionCluster(); } catch (_) {}
+
+    elevateHamburger();
         }
       }, t);
     }
@@ -459,6 +500,193 @@
     if (document.hidden) onEnd(undefined);
   });
 
+
+// ===== Interact + Directional Attack buttons =====
+// Layout: a central Interact button with 4 directional attack pads around it.
+// By default:
+// - Interact is faintly visible (discoverable)
+// - Attack pads are "ghost" (nearly invisible) but still tappable; they brighten while pressed.
+
+const ACTION_SIZE = 72;
+const ACTION_GAP = 10;
+const ACTION_RANGE_PX = 220; // how far ahead to aim for directional attacks
+const ACTION_HOLD_REPEAT = true; // hold-to-attack (uses attackHold if available)
+
+const actionWrap = document.createElement("div");
+actionWrap.className = "mc-action-wrap";
+document.body.appendChild(actionWrap);
+
+function makeBtn(label, extraClass = "") {
+  const b = document.createElement("div");
+  b.className = `mc-action-btn ${extraClass}`.trim();
+  b.textContent = label;
+  b.setAttribute("role", "button");
+  b.setAttribute("aria-label", label || "attack");
+  return b;
+}
+
+const btnInteract = makeBtn("E"); // mimic desktop "E"
+const btnUp = makeBtn("", "mc-ghost");
+const btnDown = makeBtn("", "mc-ghost");
+const btnLeft = makeBtn("", "mc-ghost");
+const btnRight = makeBtn("", "mc-ghost");
+
+// Position with CSS grid (we'll place the wrapper itself in JS per safe area)
+actionWrap.style.display = "none";
+actionWrap.style.width = (ACTION_SIZE * 3 + ACTION_GAP * 2) + "px";
+actionWrap.style.height = (ACTION_SIZE * 3 + ACTION_GAP * 2) + "px";
+actionWrap.style.display = "grid";
+actionWrap.style.gridTemplateColumns = `repeat(3, ${ACTION_SIZE}px)`;
+actionWrap.style.gridTemplateRows = `repeat(3, ${ACTION_SIZE}px)`;
+actionWrap.style.gap = ACTION_GAP + "px";
+actionWrap.style.alignItems = "center";
+actionWrap.style.justifyItems = "center";
+
+// grid placement
+btnUp.style.gridColumn = "2";
+btnUp.style.gridRow = "1";
+btnLeft.style.gridColumn = "1";
+btnLeft.style.gridRow = "2";
+btnInteract.style.gridColumn = "2";
+btnInteract.style.gridRow = "2";
+btnRight.style.gridColumn = "3";
+btnRight.style.gridRow = "2";
+btnDown.style.gridColumn = "2";
+btnDown.style.gridRow = "3";
+
+// Make Interact more visible than ghost pads
+btnInteract.style.background = "rgba(255,255,255,0.07)";
+btnInteract.style.borderColor = "rgba(255,255,255,0.16)";
+btnInteract.style.color = "rgba(255,255,255,0.75)";
+
+actionWrap.appendChild(btnUp);
+actionWrap.appendChild(btnLeft);
+actionWrap.appendChild(btnInteract);
+actionWrap.appendChild(btnRight);
+actionWrap.appendChild(btnDown);
+
+function getMyWorldPos() {
+  if (typeof window.getMyPos === "function") return window.getMyPos();
+  try {
+    const id = window.myId;
+    const wp = window.worldPlayers;
+    if (id && wp && wp[id]) return { x: wp[id].x, y: wp[id].y };
+  } catch (_) {}
+  return null;
+}
+
+function doInteract() {
+  try {
+    if (typeof window.isOnPortal === "function" && window.isOnPortal()) {
+      if (typeof window.startPortalFade === "function") { window.startPortalFade(); return; }
+    }
+    if (typeof window.tryInteract === "function") { window.tryInteract(); return; }
+  } catch (_) {}
+  dispatchKey("keydown", "e");
+  dispatchKey("keyup", "e");
+}
+
+function aimWorldFromDir(dx, dy) {
+  const me = getMyWorldPos();
+  if (!me) return null;
+  const len = Math.hypot(dx, dy) || 1;
+  const ux = dx / len;
+  const uy = dy / len;
+  return { wx: me.x + ux * ACTION_RANGE_PX, wy: me.y + uy * ACTION_RANGE_PX };
+}
+
+let holdActive = false;
+let holdDir = null;
+
+function startAttackDir(dx, dy) {
+  const aim = aimWorldFromDir(dx, dy);
+  if (!aim) return;
+
+  try {
+    if (window.mainMenuOpen || window.inventoryOpen || window.skillsOpen || window.monsterBookOpen) return;
+  } catch (_) {}
+
+  if (ACTION_HOLD_REPEAT && typeof window.sendAttackHoldState === "function") {
+    holdActive = true;
+    holdDir = { dx, dy };
+    window.sendAttackHoldState(true, aim.wx, aim.wy);
+  } else if (typeof window.sendAttackAtWorld === "function") {
+    window.sendAttackAtWorld(aim.wx, aim.wy);
+  } else if (typeof window.sendAttack === "function") {
+    window.sendAttack();
+  }
+}
+
+function stopAttackHold() {
+  if (!holdActive) return;
+  holdActive = false;
+  holdDir = null;
+  try {
+    if (typeof window.sendAttackHoldStop === "function") window.sendAttackHoldStop();
+    else if (typeof window.sendAttackHoldState === "function") window.sendAttackHoldState(false, 0, 0);
+  } catch (_) {}
+}
+
+function tickHoldAim() {
+  if (!holdActive || !holdDir) return;
+  const aim = aimWorldFromDir(holdDir.dx, holdDir.dy);
+  if (!aim) return;
+  try {
+    if (typeof window.sendAttackHoldAim === "function") window.sendAttackHoldAim(aim.wx, aim.wy);
+  } catch (_) {}
+}
+setInterval(tickHoldAim, 80);
+
+function bindPress(el, onDown, onUp) {
+  el.addEventListener("pointerdown", (e) => {
+    if (!isLandscapeNow()) return;
+    e.preventDefault();
+    e.stopPropagation();
+    onDown(e);
+    try { el.setPointerCapture(e.pointerId); } catch (_) {}
+  }, { passive: false });
+
+  el.addEventListener("pointerup", (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (onUp) onUp(e);
+    try { el.releasePointerCapture(e.pointerId); } catch (_) {}
+  }, { passive: false });
+
+  el.addEventListener("pointercancel", (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (onUp) onUp(e);
+  }, { passive: false });
+}
+
+bindPress(btnInteract, () => doInteract());
+
+bindPress(btnUp, () => startAttackDir(0, -1), () => stopAttackHold());
+bindPress(btnDown, () => startAttackDir(0, 1), () => stopAttackHold());
+bindPress(btnLeft, () => startAttackDir(-1, 0), () => stopAttackHold());
+bindPress(btnRight, () => startAttackDir(1, 0), () => stopAttackHold());
+
+window.addEventListener("blur", () => stopAttackHold());
+document.addEventListener("visibilitychange", () => { if (document.hidden) stopAttackHold(); });
+
+function positionActionCluster() {
+  const vp = getVP();
+  const safe = getSafeInsets();
+
+  const clusterW = ACTION_SIZE * 3 + ACTION_GAP * 2;
+  const clusterH = ACTION_SIZE * 3 + ACTION_GAP * 2;
+
+  const minTop = safe.top + 84;
+  const maxTop = vp.h - safe.bottom - clusterH - 84;
+
+  const top = Math.max(minTop, Math.min(Math.round(vp.h / 2 - clusterH / 2), maxTop));
+  const right = Math.round(safe.right + 12);
+
+  actionWrap.style.top = top + "px";
+  actionWrap.style.right = right + "px";
+}
+
   // ===== Orientation handling =====
   function applyOrientationMode() {
     const landscape = isLandscapeNow();
@@ -467,8 +695,11 @@
     if (!landscape) {
       onEnd(undefined);
       touchZone.style.display = "none";
+      actionWrap.style.display = "none";
     } else {
       touchZone.style.display = "block";
+      actionWrap.style.display = "grid";
+      positionActionCluster();
       resizeCanvasInternal();
       scheduleResizes();
       setTimeout(elevateHamburger, 0);
