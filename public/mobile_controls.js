@@ -525,7 +525,8 @@ function makeBtn(label, extraClass = "") {
   return b;
 }
 
-const btnInteract = makeBtn("E"); // mimic desktop "E"
+const btnInteract = makeBtn("");
+btnInteract.setAttribute("aria-label", "Interact");
 const btnUp = makeBtn("", "mc-ghost");
 const btnDown = makeBtn("", "mc-ghost");
 const btnLeft = makeBtn("", "mc-ghost");
