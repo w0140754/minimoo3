@@ -77,11 +77,77 @@
   cursor: not-allowed;
 }
 
+  /* --- Editor side panel (off-canvas UI, same window) --- */
+.app-layout{display:flex; gap:14px; align-items:flex-start; flex-wrap:wrap;}
+.editor-panel{
+  width: 320px;
+  max-width: 92vw;
+  background: rgba(0,0,0,0.35);
+  border: 1px solid rgba(255,255,255,0.14);
+  border-radius: 14px;
+  padding: 10px;
+  box-shadow: 0 10px 26px rgba(0,0,0,0.30);
+}
+.editor-panel.hidden{display:none;}
+.editor-panel h2{margin:6px 0 8px; font-size:14px; font-weight:700;}
+.editor-row{display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-bottom:8px;}
+.editor-row button, .editor-row select{
+  background: rgba(255,255,255,0.08);
+  border: 1px solid rgba(255,255,255,0.14);
+  color:#fff;
+  border-radius: 10px;
+  padding: 7px 10px;
+  cursor:pointer;
+  font-size: 12px;
+}
+.editor-row button:hover{background: rgba(255,255,255,0.12);}
+.editor-row input{
+  width: 100%;
+  background: rgba(255,255,255,0.06);
+  border: 1px solid rgba(255,255,255,0.14);
+  color:#fff;
+  border-radius: 10px;
+  padding: 8px 10px;
+  font-size: 12px;
+}
+.tile-grid{
+  display:grid;
+  grid-template-columns: repeat(5, 1fr);
+  gap: 8px;
+  max-height: 520px;
+  overflow:auto;
+  padding-right: 2px;
+}
+.tile-btn{
+  width: 100%;
+  aspect-ratio: 1 / 1;
+  border-radius: 12px;
+  border: 1px solid rgba(255,255,255,0.12);
+  background: rgba(0,0,0,0.25);
+  padding: 6px;
+  cursor:pointer;
+  display:flex;
+  align-items:center;
+  justify-content:center;
+}
+.tile-btn.selected{
+  outline: 2px solid rgba(255,255,255,0.55);
+  outline-offset: 2px;
+}
+.tile-btn canvas{width:100%; height:100%; image-rendering: pixelated;}
+.editor-meta{font-size:12px; opacity:0.85; margin-top:8px; line-height:1.3;}
+@media (max-width: 900px){
+  .app-layout{flex-direction:column;}
+  .editor-panel{width: min(720px, 96vw);}
+  .tile-grid{grid-template-columns: repeat(8, 1fr); max-height: 240px;}
+}
+
   </style>
 <meta content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no" name="viewport"/><meta content="#000000" name="theme-color"/><meta content="yes" name="apple-mobile-web-app-capable"/><meta content="black-translucent" name="apple-mobile-web-app-status-bar-style"/><meta content="Mini MMO" name="apple-mobile-web-app-title"/><link href="/manifest.webmanifest" rel="manifest"/><link href="/icons/icon-180.png" rel="apple-touch-icon"/></head>
 <body>
 <h1>Mini MMO</h1>
 <p>WASD / Arrow keys • Press <b>E</b> near NPC / portal • Left-click to attack • Press <b>I</b> (or ☰) for inventory • Press <b>K</b> for skills</p>
+<div class="app-layout" id="appLayout">
 <div class="game-wrap" id="gameWrap">
 <button aria-expanded="false" aria-label="Open inventory (I)" class="hud-btn" id="invBtn" type="button">☰</button>
 <div aria-label="Game menu" class="main-menu" id="mainMenu" role="menu">
@@ -92,6 +158,23 @@
 <button aria-disabled="true" class="main-menu-item disabled" data-action="settings" disabled="" role="menuitem" type="button">Settings <span class="hint">Soon</span></button>
 </div>
 <canvas height="600" id="c" width="800"></canvas>
+
+    </div>
+    <div class="editor-panel hidden" id="editorPanel" aria-label="Map editor panel">
+      <h2>Map Editor</h2>
+      <div class="editor-row">
+        <button type="button" id="editorLayerBtn">Layer: GROUND</button>
+        <button type="button" id="editorGridBtn">Grid: ON</button>
+        <button type="button" id="editorCollBtn">Coll: ON</button>
+        <button type="button" id="editorExportBtn" title="Ctrl+E">Export</button>
+      </div>
+      <div class="editor-row">
+        <input id="editorSearch" type="text" placeholder="Filter by tile # (e.g., 12) — tags later" />
+      </div>
+      <div class="editor-meta" id="editorStatus">Cursor: —</div>
+      <div class="tile-grid" id="editorTileGrid"></div>
+      <div class="editor-meta" id="editorMeta">Select a tile.</div>
+    </div>
 </div>
 <script src="/mobile_controls.js"></script><script>
 "use strict";
@@ -1155,6 +1238,149 @@ function editorSetTileIndexByValue(v) {
   if (idx !== -1) editorTileIndex = idx;
 }
 
+// ======================
+// Editor DOM Panel (off-canvas UI)
+// ======================
+let editorDomReady = false;
+
+function setEditorPanelVisible(v){
+  const p = document.getElementById("editorPanel");
+  if (!p) return;
+  p.classList.toggle("hidden", !v);
+}
+
+function editorUpdateDomHeader(){
+  const layerBtn = document.getElementById("editorLayerBtn");
+  const gridBtn  = document.getElementById("editorGridBtn");
+  const collBtn  = document.getElementById("editorCollBtn");
+  if (layerBtn) layerBtn.textContent = `Layer: ${editorLayer.toUpperCase()}`;
+  if (gridBtn)  gridBtn.textContent  = `Grid: ${editorShowGrid ? "ON" : "OFF"}`;
+  if (collBtn)  collBtn.textContent  = `Coll: ${editorShowColl ? "ON" : "OFF"}`;
+}
+
+function editorUpdateDomStatus(){
+  const el = document.getElementById("editorStatus");
+  if (!el) return;
+  if (!editorOpen || !map || !editorMouseHas) { el.textContent = "Cursor: —"; return; }
+  const tx = Math.floor((camX + editorMouseX) / TILE_SIZE);
+  const ty = Math.floor((camY + editorMouseY) / TILE_SIZE);
+  if (ty < 0 || tx < 0 || ty >= map.length || tx >= map[0].length) { el.textContent = "Cursor: —"; return; }
+  const g = map[ty][tx] | 0;
+  const o = (objMap && objMap[ty] ? (objMap[ty][tx] | 0) : 0);
+  el.textContent = `Cursor: (${tx}, ${ty}) • Ground: ${g} • Obj: ${o}`;
+}
+
+function editorTileThumbCanvas(tile, layer){
+  const c = document.createElement("canvas");
+  c.width = 48; c.height = 48;
+  const g = c.getContext("2d");
+  g.imageSmoothingEnabled = false;
+
+  const img = (layer === "object") ? objTileImage : tileImage;
+  if (!img || !img.complete || img.naturalWidth <= 0) return c;
+
+  // 0 is empty for objects
+  if (layer === "object" && tile === 0) {
+    g.fillStyle = "rgba(255,255,255,0.08)";
+    g.fillRect(0,0,48,48);
+    g.fillStyle = "rgba(255,255,255,0.35)";
+    g.fillRect(6,23,36,2);
+    return c;
+  }
+
+  // Object layer IDs are 1-based in the map data (0 = empty), but atlas coords are 0-based.
+  const tileIndex = (layer === "object") ? (tile - 1) : tile;
+
+  const col = tileIndex % TILESET_COLS;
+  const row = Math.floor(tileIndex / TILESET_COLS);
+  const sx = col * (TILE_SIZE + TILE_PAD);
+  const sy = row * (TILE_SIZE + TILE_PAD);
+
+  g.drawImage(img, sx, sy, TILE_SIZE, TILE_SIZE, 0, 0, 48, 48);
+  return c;
+}
+
+function editorBuildTileGrid(){
+  const grid = document.getElementById("editorTileGrid");
+  if (!grid) return;
+
+  const q = (document.getElementById("editorSearch")?.value || "").trim();
+  const list = editorAllowedList().slice();
+
+  let filtered = list;
+  // quick filter: numeric substring match
+  if (q) {
+    if (/^\d+$/.test(q)) {
+      filtered = list.filter(t => String(t).includes(q));
+    }
+  }
+
+  grid.innerHTML = "";
+  const sel = editorSelectedTile();
+
+  for (const tile of filtered) {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "tile-btn" + (tile === sel ? " selected" : "");
+    btn.title = `Tile ${tile}`;
+    btn.appendChild(editorTileThumbCanvas(tile, editorLayer));
+    btn.addEventListener("click", () => {
+      editorSetTileIndexByValue(tile);
+      editorBuildTileGrid();
+      editorUpdateDomHeader();
+      const meta = document.getElementById("editorMeta");
+      if (meta) meta.textContent = `Selected: ${editorLayer} tile ${tile} • Left click paints, Right click erases`;
+    });
+    grid.appendChild(btn);
+  }
+}
+
+function editorInitDomPanelOnce(){
+  if (editorDomReady) return;
+  editorDomReady = true;
+
+  const layerBtn = document.getElementById("editorLayerBtn");
+  const gridBtn  = document.getElementById("editorGridBtn");
+  const collBtn  = document.getElementById("editorCollBtn");
+  const expBtn   = document.getElementById("editorExportBtn");
+  const search   = document.getElementById("editorSearch");
+
+  layerBtn?.addEventListener("click", () => {
+    editorLayer = (editorLayer === "ground") ? "object" : "ground";
+    editorTileIndex = 0;
+    editorSetTileIndexByValue(editorLayer === "object" ? 0 : 0);
+    editorUpdateDomHeader();
+    editorBuildTileGrid();
+  });
+
+  gridBtn?.addEventListener("click", () => {
+    editorShowGrid = !editorShowGrid;
+    
+      editorUpdateDomHeader();
+editorUpdateDomHeader();
+  });
+
+  collBtn?.addEventListener("click", () => {
+    editorShowColl = !editorShowColl;
+    
+      editorUpdateDomHeader();
+editorUpdateDomHeader();
+  });
+
+  expBtn?.addEventListener("click", () => {
+    exportCurrentMapToClipboard();
+  });
+
+  search?.addEventListener("input", () => editorBuildTileGrid());
+}
+
+// Re-use your existing Ctrl+E export logic by dispatching a synthetic hotkey.
+function exportCurrentMapToClipboard(){
+  const evt = new KeyboardEvent("keydown", { key: "e", ctrlKey: true, bubbles: true });
+  window.dispatchEvent(evt);
+}
+
+
 // send tile edit to server (server will validate)
 function sendEditTile(layer, tx, ty, tile) {
   wsSend({ type: "editTile", layer, x: tx, y: ty, tile });
@@ -1880,6 +2106,14 @@ hatIdleOverlays.cloth_hat.src = "/assets/equipment/overlays/overlay_idle_cloth_h
 
 hatIdleOverlays.charger_helmet.src = "/assets/equipment/overlays/overlay_idle_charger_helmet.png";
 hatIdleOverlays.red_duke.src = "/assets/equipment/overlays/overlay_idle_red_duke.png";
+
+// Default hair overlays (shown when no hat is equipped)
+// Update these paths if your filenames differ.
+const defaultHairOverlays = { default: new Image() };
+defaultHairOverlays.default.src = "/assets/equipment/overlays/overlay_hair.png";
+
+const defaultHairIdleOverlays = { default: new Image() };
+defaultHairIdleOverlays.default.src = "/assets/equipment/overlays/overlay_idle_hair.png";
 /* ======================
    CANVAS
 ====================== */
@@ -3740,6 +3974,12 @@ window.addEventListener("keydown", (e) => {
       editorSetTileIndexByValue(0);
       levelToastText = editorOpen ? "Editor ON (TAB layer, [ ] tile, Ctrl+E export)" : "Editor OFF";
       levelToastUntilMs = performance.now() + 2200;
+
+      // Off-canvas editor panel
+      editorInitDomPanelOnce();
+      setEditorPanelVisible(editorOpen);
+      editorUpdateDomHeader();
+      if (editorOpen) editorBuildTileGrid();
     }
     return;
   }
@@ -3778,26 +4018,36 @@ if (key === "F9") {
 }
 
   if (editorOpen) {
+    // keep panel in sync
+    editorInitDomPanelOnce();
+    setEditorPanelVisible(true);
     // Don't let movement keys interfere while editing unless you want them.
     if (key === "Tab") {
       e.preventDefault();
       editorLayer = (editorLayer === "ground") ? "object" : "ground";
       editorTileIndex = 0;
       editorSetTileIndexByValue(0);
-      return;
+      
+      editorUpdateDomHeader();
+      editorBuildTileGrid();
+return;
     }
 
     if (key === "[") {
       e.preventDefault();
       const list = editorAllowedList();
       editorTileIndex = (editorTileIndex - 1 + list.length) % list.length;
-      return;
+      
+      editorBuildTileGrid();
+return;
     }
     if (key === "]") {
       e.preventDefault();
       const list = editorAllowedList();
       editorTileIndex = (editorTileIndex + 1) % list.length;
-      return;
+      
+      editorBuildTileGrid();
+return;
     }
 
     if (k === "g") {
@@ -3936,6 +4186,7 @@ canvas.addEventListener("mousemove", (e) => {
   editorMouseX = mx;
   editorMouseY = my;
   editorMouseHas = true;
+  editorUpdateDomStatus();
 });
 
 canvas.addEventListener("mouseleave", () => { editorMouseHas = false; });
@@ -6353,20 +6604,21 @@ function drawEditorOverlay() {
     }
   }
 
-  // Collision overlay (helps distinguish floor vs wall even if tiles look similar)
+  // Collision overlay (neutral): shows tiles that currently block movement based on your real collision rules
+  // (ground: isSolid(tile), objects: isObjSolid(objTile)). No hard-coded tile IDs.
   if (editorShowColl) {
     for (let y = startTy; y <= endTy; y++) {
       for (let x = startTx; x <= endTx; x++) {
-        const g = map[y][x];
-        const o = (objMap && objMap[y] ? objMap[y][x] : 0);
+        const g = map[y][x] | 0;
+        const o = (objMap && objMap[y] ? (objMap[y][x] | 0) : 0);
 
-        if (g === 1) {
-          ctx.strokeStyle = "rgba(255,80,80,0.70)";
-          ctx.strokeRect(x * TILE_SIZE + 1.5, y * TILE_SIZE + 1.5, TILE_SIZE - 3, TILE_SIZE - 3);
-        } else if (o === 2 || o === 6) {
-          ctx.strokeStyle = "rgba(255,190,80,0.65)";
-          ctx.strokeRect(x * TILE_SIZE + 3.5, y * TILE_SIZE + 3.5, TILE_SIZE - 7, TILE_SIZE - 7);
-        }
+        const blocked = isSolid(g) || isObjSolid(o);
+        if (!blocked) continue;
+
+        ctx.fillStyle = "rgba(0,0,0,0.14)";
+        ctx.fillRect(x * TILE_SIZE, y * TILE_SIZE, TILE_SIZE, TILE_SIZE);
+        ctx.strokeStyle = "rgba(255,255,255,0.16)";
+        ctx.strokeRect(x * TILE_SIZE + 0.5, y * TILE_SIZE + 0.5, TILE_SIZE - 1, TILE_SIZE - 1);
       }
     }
   }
@@ -6384,7 +6636,11 @@ function drawEditorOverlay() {
     }
   }
 
+  // Keep sidebar status in sync even if the camera moves while the mouse is stationary.
+  editorUpdateDomStatus();
+
   ctx.restore();
+  return;
 
   // Screen-space panel
   const list = editorAllowedList();
@@ -7766,13 +8022,19 @@ const weaponBehind = (renderDir === DIR.UP) && (weapon === "sword" || weapon ===
       }
 
       const hatId = p?.equipment?.hat;
+      const hFrame = idlePose ? (st.idleFrame || 0) : st.frame;
+      let hImg = null;
+
       if (hatId) {
-        const hImg = idlePose ? hatIdleOverlays[hatId] : hatOverlays[hatId];
-        const hFrame = idlePose ? (st.idleFrame || 0) : st.frame;
-        if (hImg) {
-          hatSprite = hImg;
-          drawSprite(hImg, drawX, drawY, renderDir, hFrame, PLAYER_FRAME_W, PLAYER_FRAME_H);
-        }
+        hImg = idlePose ? hatIdleOverlays[hatId] : hatOverlays[hatId];
+      } else {
+        // No hat equipped: draw default hair paper-doll overlay instead.
+        hImg = idlePose ? defaultHairIdleOverlays.default : defaultHairOverlays.default;
+      }
+
+      if (hImg) {
+        hatSprite = hImg;
+        drawSprite(hImg, drawX, drawY, renderDir, hFrame, PLAYER_FRAME_W, PLAYER_FRAME_H);
       }
 
       if (fx && performance.now() < fx.untilMs) {
