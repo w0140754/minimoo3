@@ -398,6 +398,31 @@ function drawSkill3Trails() {
 
 const TILE_PAD = 1;
 const TILESET_COLS = 5; // tiles per row in tiles.png and tiles_objects.png
+
+// ======================
+// AUTO-TILE (16-variant) support
+// - Stored in the ground layer as a special tile id (does not live in tiles.png).
+// - Rendered from its own 4x4 atlas: /assets/autotile_dirtpath.png
+// - Neighbor mask bits: N=1, E=2, S=4, W=8  (0..15)
+// ======================
+const AUTO_DIRTPATH_TILE = 500; // keep <= server EDITOR_MAX_GROUND_TILE (default 999)
+const AUTO_DIRTPATH_COLS = 4;   // 4x4 = 16 variants
+
+function isAutoDirtPath(tile) { return tile === AUTO_DIRTPATH_TILE; }
+
+function autoDirtPathMaskAt(tx, ty) {
+  if (!map) return 0;
+  let m = 0;
+  // N
+  if (ty > 0 && map[ty - 1]?.[tx] === AUTO_DIRTPATH_TILE) m |= 1;
+  // E
+  if (tx + 1 < map[0].length && map[ty]?.[tx + 1] === AUTO_DIRTPATH_TILE) m |= 2;
+  // S
+  if (ty + 1 < map.length && map[ty + 1]?.[tx] === AUTO_DIRTPATH_TILE) m |= 4;
+  // W
+  if (tx > 0 && map[ty]?.[tx - 1] === AUTO_DIRTPATH_TILE) m |= 8;
+  return m & 15;
+}
 // Convention: odd rows in tiles.png are passable; even rows are blocked.
 const WALL_TILE = TILESET_COLS; // row 2, col 1 (1-based) when cols=5
 
@@ -1179,7 +1204,17 @@ let skillsTab = "wand";
    Ctrl+E: export current map+objects to clipboard/console
 ====================== */
 let editorOpen = false;
-let editorLayer = "ground"; // "ground" | "object"
+let editorLayer = "ground"; // "ground" | "object" | "height" | "zgate" | "mobs"
+const EDITOR_LAYERS = ["ground","object","height","zgate","mobs"];
+function editorNextLayer() {
+  const i = Math.max(0, EDITOR_LAYERS.indexOf(editorLayer));
+  editorLayer = EDITOR_LAYERS[(i + 1) % EDITOR_LAYERS.length];
+}
+function editorPrevLayer() {
+  const i = Math.max(0, EDITOR_LAYERS.indexOf(editorLayer));
+  editorLayer = EDITOR_LAYERS[(i - 1 + EDITOR_LAYERS.length) % EDITOR_LAYERS.length];
+}
+
 let editorShowGrid = true;
 let editorShowColl = true;
 let editorMouseX = 0, editorMouseY = 0; let editorMouseHas = false;
@@ -1208,6 +1243,9 @@ function rebuildEditorGroundTiles() {
     list.push(i);
   }
   if (list.length) EDIT_GROUND_TILES = list;
+  // Add special editor-only ground tiles (not in tiles.png)
+  if (!EDIT_GROUND_TILES.includes(AUTO_DIRTPATH_TILE)) EDIT_GROUND_TILES.push(AUTO_DIRTPATH_TILE);
+
 }
           // grass, wall (keep portals/statues unchanged for now)
 let EDIT_OBJECT_TILES = [0, 1, 2, 6];    // will expand automatically based on tiles_objects.png
@@ -1223,10 +1261,73 @@ function rebuildEditorObjectTiles() {
   editorTileIndex = clamp(editorTileIndex, 0, EDIT_OBJECT_TILES.length - 1);
 }
 
+
+// Mob types selectable in the editor (spawn points, not live mobs).
+// We try mobCatalog first (server-provided), then fall back to loaded sprite keys.
+let EDIT_MOB_TYPES = ["green"]; // default fallback
+function rebuildEditorMobTypes() {
+  let keys = [];
+  try { if (typeof mobCatalog === "object" && mobCatalog) keys = Object.keys(mobCatalog); } catch (_) {}
+  if (!keys || !keys.length) {
+    try { if (typeof mobSprites === "object" && mobSprites) keys = Object.keys(mobSprites); } catch (_) {}
+  }
+  keys = (keys || []).filter(k => k && k !== "__proto__").sort();
+  if (keys.length) EDIT_MOB_TYPES = keys;
+  editorTileIndex = clamp(editorTileIndex, 0, Math.max(0, EDIT_MOB_TYPES.length - 1));
+}
+
 let editorTileIndex = 0; // index into allowed list for current layer
 
+// Editor-only mob spawn points (purely authoring data). Stored per mapId and exported with Ctrl+E.
+// Format: { type, x, y, count, respawnSec, leash }
+const editorMobSpawnsByMapId = new Map();
+// Tracks whether the user has interacted with the mobs layer for a given map in this session.
+// If they intentionally clear all spawns, we should NOT reseed from base map data.
+const editorMobSpawnsTouched = new Set();
+
+function getEditorMobSpawnsFor(mapId) {
+  const key = String(mapId ?? "");
+  if (!editorMobSpawnsByMapId.has(key)) editorMobSpawnsByMapId.set(key, []);
+  return editorMobSpawnsByMapId.get(key);
+}
+
+// Seed editor mob spawns for a map from authored map data (mobSpawns) if the editor
+// hasn't been used on that map yet. This prevents exporting an empty mobSpawns array
+// when you didn't touch the mobs layer.
+function seedEditorMobSpawns(mapId, mobSpawns) {
+  const key = String(mapId ?? "");
+  if (editorMobSpawnsTouched.has(key)) return;
+  const list = getEditorMobSpawnsFor(key);
+  if (!Array.isArray(list) || list.length > 0) return; // don't overwrite edits
+  const base = Array.isArray(mobSpawns) ? mobSpawns : [];
+  for (const s of base) {
+    if (!s) continue;
+    const mobType = String(s.mobType ?? s.type ?? s.mob ?? s.kind ?? "unknown");
+    const tx = Number.isFinite(s.tx) ? s.tx : (Number.isFinite(s.x) ? s.x : null);
+    const ty = Number.isFinite(s.ty) ? s.ty : (Number.isFinite(s.y) ? s.y : null);
+    if (!Number.isFinite(tx) || !Number.isFinite(ty)) continue;
+    // Editor list format prefers x/y for hit-testing and painting.
+    list.push({ type: mobType, x: tx, y: ty, tx, ty, ...(s.id ? { id: s.id } : {}), ...(s.mapId ? { mapId: s.mapId } : {}) });
+  }
+}
+
+function findMobSpawnIndexAt(list, x, y) {
+  for (let i = 0; i < list.length; i++) {
+    const s = list[i];
+    if (!s) continue;
+    if ((s.x|0) === (x|0) && (s.y|0) === (y|0)) return i;
+  }
+  return -1;
+}
+
+
 function editorAllowedList() {
-  return (editorLayer === "ground") ? EDIT_GROUND_TILES : EDIT_OBJECT_TILES;
+  if (editorLayer === "ground") return EDIT_GROUND_TILES;
+  if (editorLayer === "object") return EDIT_OBJECT_TILES;
+  if (editorLayer === "height") return [0,1,2,3];
+  if (editorLayer === "zgate") return [0,1];
+  if (editorLayer === "mobs") return EDIT_MOB_TYPES;
+  return EDIT_GROUND_TILES;
 }
 function editorSelectedTile() {
   const list = editorAllowedList();
@@ -1262,12 +1363,20 @@ function editorUpdateDomStatus(){
   const el = document.getElementById("editorStatus");
   if (!el) return;
   if (!editorOpen || !map || !editorMouseHas) { el.textContent = "Cursor: —"; return; }
+  const id = (typeof currentMapId !== "undefined") ? currentMapId
+           : (typeof currentMap !== "undefined" && currentMap?.id != null) ? currentMap.id
+           : 1;
   const tx = Math.floor((camX + editorMouseX) / TILE_SIZE);
   const ty = Math.floor((camY + editorMouseY) / TILE_SIZE);
   if (ty < 0 || tx < 0 || ty >= map.length || tx >= map[0].length) { el.textContent = "Cursor: —"; return; }
   const g = map[ty][tx] | 0;
   const o = (objMap && objMap[ty] ? (objMap[ty][tx] | 0) : 0);
-  el.textContent = `Cursor: (${tx}, ${ty}) • Ground: ${g} • Obj: ${o}`;
+  const z = (zMap && zMap[ty] ? (zMap[ty][tx] | 0) : 0);
+  const zg = (zGateMap && zGateMap[ty] ? (zGateMap[ty][tx] ? 1 : 0) : 0);
+  const mobs = getEditorMobSpawnsFor(id);
+  const mi = findMobSpawnIndexAt(mobs, tx, ty);
+  const mtxt = (mi !== -1) ? (()=>{ const sp=mobs[mi]; const nm = mobCatalog?.[sp.type]?.name || sp.type; const ct = (sp.count|0)||1; return `${nm} x${ct}`; })() : "—";
+  el.textContent = `Cursor: (${tx},${ty}) • Ground:${g} • Obj:${o} • Z:${z} • Gate:${zg} • Mob:${mtxt}`;
 }
 
 function editorTileThumbCanvas(tile, layer){
@@ -1275,6 +1384,54 @@ function editorTileThumbCanvas(tile, layer){
   c.width = 48; c.height = 48;
   const g = c.getContext("2d");
   g.imageSmoothingEnabled = false;
+
+  // Height/zGate layers use synthetic thumbnails
+  if (layer === "height") {
+    g.fillStyle = "rgba(255,255,255,0.10)";
+    g.fillRect(0,0,48,48);
+    g.fillStyle = "rgba(255,255,255,0.85)";
+    g.font = "20px system-ui";
+    g.textAlign = "center";
+    g.textBaseline = "middle";
+    g.fillText(String(tile), 24, 24);
+    return c;
+  }
+  if (layer === "zgate") {
+    g.fillStyle = tile ? "rgba(80,200,120,0.25)" : "rgba(255,255,255,0.08)";
+    g.fillRect(0,0,48,48);
+    g.strokeStyle = "rgba(255,255,255,0.35)";
+    g.strokeRect(6,6,36,36);
+    g.fillStyle = "rgba(255,255,255,0.85)";
+    g.font = "14px system-ui";
+    g.textAlign = "center";
+    g.textBaseline = "middle";
+    g.fillText(tile ? "ON" : "OFF", 24, 24);
+    return c;
+  }
+
+  if (layer === "mobs") {
+    const mobType = String(tile || "");
+    g.fillStyle = "rgba(120,80,255,0.18)";
+    g.fillRect(0,0,48,48);
+    g.strokeStyle = "rgba(255,255,255,0.20)";
+    g.strokeRect(0.5,0.5,47,47);
+
+    const imgM = (typeof mobSprites !== "undefined" && mobSprites) ? (mobSprites[mobType] || null) : null;
+    if (imgM && imgM.complete && imgM.naturalWidth > 0) {
+      const fs = getMobFrameSize(imgM);
+      const fw = fs?.w || 48;
+      const fh = fs?.h || 48;
+      g.imageSmoothingEnabled = false;
+      g.drawImage(imgM, 0, 0, fw, fh, 4, 4, 40, 40);
+    } else {
+      g.fillStyle = "rgba(255,255,255,0.85)";
+      g.font = "11px system-ui";
+      g.textAlign = "center";
+      g.textBaseline = "middle";
+      g.fillText(mobType ? mobType.slice(0, 8) : "mob", 24, 24);
+    }
+    return c;
+  }
 
   const img = (layer === "object") ? objTileImage : tileImage;
   if (!img || !img.complete || img.naturalWidth <= 0) return c;
@@ -1288,7 +1445,29 @@ function editorTileThumbCanvas(tile, layer){
     return c;
   }
 
-  // Object layer IDs are 1-based in the map data (0 = empty), but atlas coords are 0-based.
+  
+  // Special case: ground autotile thumbnail
+  if (layer === "ground" && tile === AUTO_DIRTPATH_TILE) {
+    const img2 = autotileDirtImg;
+    if (img2 && img2.complete && img2.naturalWidth > 0) {
+      const cell2 = TILE_SIZE + TILE_PAD;
+      const mask = 15; // show the "connected on all sides" variant in the palette
+      const col2 = mask % AUTO_DIRTPATH_COLS;
+      const row2 = Math.floor(mask / AUTO_DIRTPATH_COLS);
+      const sx2 = col2 * cell2;
+      const sy2 = row2 * cell2;
+      g.drawImage(img2, sx2, sy2, TILE_SIZE, TILE_SIZE, 0, 0, 48, 48);
+      return c;
+    }
+    // fallback if not loaded yet
+    g.fillStyle = "rgba(255,255,255,0.10)";
+    g.fillRect(0,0,48,48);
+    g.fillStyle = "rgba(255,255,255,0.55)";
+    g.font = "11px system-ui";
+    g.fillText("AUTO", 10, 28);
+    return c;
+  }
+// Object layer IDs are 1-based in the map data (0 = empty), but atlas coords are 0-based.
   const tileIndex = (layer === "object") ? (tile - 1) : tile;
 
   const col = tileIndex % TILESET_COLS;
@@ -1322,14 +1501,14 @@ function editorBuildTileGrid(){
     const btn = document.createElement("button");
     btn.type = "button";
     btn.className = "tile-btn" + (tile === sel ? " selected" : "");
-    btn.title = `Tile ${tile}`;
+    btn.title = (editorLayer === "mobs") ? `Mob ${tile}` : `Tile ${tile}`;
     btn.appendChild(editorTileThumbCanvas(tile, editorLayer));
     btn.addEventListener("click", () => {
       editorSetTileIndexByValue(tile);
       editorBuildTileGrid();
       editorUpdateDomHeader();
       const meta = document.getElementById("editorMeta");
-      if (meta) meta.textContent = `Selected: ${editorLayer} tile ${tile} • Left click paints, Right click erases`;
+      if (meta) meta.textContent = (editorLayer === "mobs") ? `Selected mob: ${tile} • Left click places, Right click removes` : `Selected: ${editorLayer} tile ${tile} • Left click paints, Right click erases`;
     });
     grid.appendChild(btn);
   }
@@ -1346,9 +1525,11 @@ function editorInitDomPanelOnce(){
   const search   = document.getElementById("editorSearch");
 
   layerBtn?.addEventListener("click", () => {
-    editorLayer = (editorLayer === "ground") ? "object" : "ground";
+    editorNextLayer();
+    if (editorLayer === "mobs") rebuildEditorMobTypes();
     editorTileIndex = 0;
-    editorSetTileIndexByValue(editorLayer === "object" ? 0 : 0);
+    const list = editorAllowedList();
+    if (list.length) editorSetTileIndexByValue(list[0]);
     editorUpdateDomHeader();
     editorBuildTileGrid();
   });
@@ -1551,9 +1732,155 @@ async function exportCurrentMapToClipboard() {
 
   const ground = map;
   const objects = objMap || Array.from({ length: h }, () => Array(w).fill(0));
+  const z = zMap || Array.from({ length: h }, () => Array(w).fill(0));
+  const zGate = zGateMap || Array.from({ length: h }, () => Array(w).fill(0));
+
+  // Editor-only mob spawns (purely authoring data)
+// Primary source: editorMobSpawnsByMapId (what you paint in the editor)
+// Fallback source: currentMap.mobSpawns (so legacy map data still exports even if you never "touched" mobs in-editor)
+  const mobs = (() => {
+    const editorList = getEditorMobSpawnsFor(id) || [];
+
+    // Base authored mob spawns from the map data (legacy)
+    const baseList = (typeof currentMap !== "undefined" && currentMap && Array.isArray(currentMap.mobSpawns))
+      ? currentMap.mobSpawns.map((s) => {
+          if (!s) return null;
+          // Normalize into the editor's expected fields (type/tx/ty) while preserving tuning fields.
+          const mobType = s.mobType ?? s.type ?? s.mob ?? s.kind ?? "unknown";
+          const tx = Number.isFinite(s.tx) ? s.tx : (Number.isFinite(s.x) ? s.x : undefined);
+          const ty = Number.isFinite(s.ty) ? s.ty : (Number.isFinite(s.y) ? s.y : undefined);
+          const out = {
+            type: String(mobType),
+            ...(Number.isFinite(tx) ? { tx } : {}),
+            ...(Number.isFinite(ty) ? { ty } : {}),
+            ...(s.id ? { id: s.id } : {}),
+            ...(s.mapId ? { mapId: s.mapId } : {}),
+          };
+          if (s.speedMul != null) out.speedMul = s.speedMul;
+          if (s.aggroSpeedMul != null) out.aggroSpeedMul = s.aggroSpeedMul;
+          if (s.passiveUntilHit != null) out.passiveUntilHit = s.passiveUntilHit;
+          return out;
+        }).filter(Boolean)
+      : [];
+
+    // If you painted mobs in the editor, KEEP the base spawns too (so existing spawns don't disappear).
+    // We union by (type, tx, ty) to avoid duplicates.
+    let list = editorList || [];
+    if ((!list || list.length === 0) && baseList.length) {
+      list = baseList;
+    } else if (list && list.length && baseList.length) {
+      const combined = baseList.concat(list);
+      const seen = new Set();
+      const merged = [];
+      for (const s of combined) {
+        if (!s) continue;
+        const mobType = String((s.mobType ?? s.type ?? s.mob ?? s.kind ?? "unknown"));
+        const tx = Number.isFinite(s.tx) ? s.tx : (Number.isFinite(s.x) ? s.x : undefined);
+        const ty = Number.isFinite(s.ty) ? s.ty : (Number.isFinite(s.y) ? s.y : undefined);
+        const key = mobType + "@" + tx + "," + ty;
+        if (seen.has(key)) continue;
+        seen.add(key);
+
+        const out = {
+          ...(s.id ? { id: s.id } : {}),
+          ...(s.mapId ? { mapId: s.mapId } : {}),
+          type: mobType,
+          ...(Number.isFinite(tx) ? { tx } : {}),
+          ...(Number.isFinite(ty) ? { ty } : {}),
+        };
+        if (s.speedMul != null) out.speedMul = s.speedMul;
+        if (s.aggroSpeedMul != null) out.aggroSpeedMul = s.aggroSpeedMul;
+        if (s.passiveUntilHit != null) out.passiveUntilHit = s.passiveUntilHit;
+        merged.push(out);
+      }
+      list = merged;
+    }
+
+    // Normalize list entries: if an entry uses tx/ty, also provide x/y for sorting consistency.
+    // (Sorting prefers y/x but older entries might only have tx/ty.)
+    list = (list || []).map(s => {
+      if (!s) return s;
+      const tx = Number.isFinite(s.tx) ? s.tx : undefined;
+      const ty = Number.isFinite(s.ty) ? s.ty : undefined;
+      return {
+        ...s,
+        ...(s.x == null && tx != null ? { x: tx } : {}),
+        ...(s.y == null && ty != null ? { y: ty } : {}),
+      };
+    });
+
+    return list.slice().sort((a,b) => (a.y-b.y) || (a.x-b.x) || String(a.type).localeCompare(String(b.type)));
+  })();
+
+  const mobSpawns = mobs.map((s, i) => {
+    const mobType = (s && (s.mobType ?? s.type)) ?? "unknown";
+    const tx = (s && (Number.isFinite(s.tx) ? s.tx : (Number.isFinite(s.x) ? s.x : undefined)));
+    const ty = (s && (Number.isFinite(s.ty) ? s.ty : (Number.isFinite(s.y) ? s.y : undefined)));
+    const out = {
+      // id is optional; server will auto-generate if missing
+      ...(s && s.id ? { id: s.id } : {}),
+      ...(s && s.mapId ? { mapId: s.mapId } : {}),
+      mobType,
+      ...(Number.isFinite(tx) ? { tx } : {}),
+      ...(Number.isFinite(ty) ? { ty } : {}),
+    };
+    // Preserve any optional tuning knobs if present on the editor object
+    if (s && s.speedMul != null) out.speedMul = s.speedMul;
+    if (s && s.aggroSpeedMul != null) out.aggroSpeedMul = s.aggroSpeedMul;
+    if (s && s.passiveUntilHit != null) out.passiveUntilHit = s.passiveUntilHit;
+    return out;
+  });
+
 
   // If your client has portals synced, include them; otherwise export empty list
   const portalList = (typeof portals !== "undefined" && Array.isArray(portals)) ? portals : [];
+
+  // Export NPC placements if available. Prefer worldNpcs snapshot (it often includes sprite/name),
+  // otherwise fall back to rendered entities list.
+  function snapCenteredTile(v) {
+    // If v looks like N+0.5 (tile-center), convert to N. Keep real fractional tiles intact.
+    const frac = v - Math.floor(v);
+    if (Math.abs(frac - 0.5) < 1e-6) return v - 0.5;
+    return v;
+  }
+
+  const npcList = (() => {
+    // 1) If the game has a worldNpcs snapshot, export from it.
+    if (typeof worldNpcs !== "undefined" && worldNpcs && typeof worldNpcs === "object") {
+      const out = [];
+      for (const [id, n] of Object.entries(worldNpcs)) {
+        if (!n) continue;
+        // Prefer tx/ty if present; otherwise derive from x/y pixel coords.
+        const tx = Number.isFinite(n.tx) ? n.tx : (Number.isFinite(n.x) ? snapCenteredTile(n.x / TILE_SIZE) : 0);
+    const ty = Number.isFinite(n.ty) ? n.ty : (Number.isFinite(n.y) ? snapCenteredTile(n.y / TILE_SIZE) : 0);
+        out.push({
+          id: String(n.id ?? id),
+          name: String(n.name ?? n.npcName ?? "NPC"),
+          tx: Math.round(tx * 100) / 100,
+          ty: Math.round(ty * 100) / 100,
+          sprite: String(n.sprite ?? n.npcSprite ?? n.spritePath ?? ""),
+        });
+      }
+      return out;
+    }
+
+    // 2) Fallback: derive from render entities (may only have id + position).
+    const ents = (typeof entities !== "undefined" && Array.isArray(entities)) ? entities : [];
+    const out = [];
+    for (const e of ents) {
+      if (!e || e.kind !== "npc") continue;
+      const tx = Number.isFinite(e.tx) ? e.tx : (Number.isFinite(e.x) ? snapCenteredTile(e.x / TILE_SIZE) : 0);
+      const ty = Number.isFinite(e.ty) ? e.ty : (Number.isFinite(e.y) ? snapCenteredTile(e.y / TILE_SIZE) : 0);
+      out.push({
+        id: String(e.id ?? "npc"),
+        name: String(e.name ?? "NPC"),
+        tx: Math.round(tx * 100) / 100,
+        ty: Math.round(ty * 100) / 100,
+        sprite: String(e.sprite ?? ""),
+      });
+    }
+    return out;
+  })();
 
   const payload =
 `// Paste into maps_data.js
@@ -1563,10 +1890,14 @@ export function ${fnName}() {
 
   const map = ${JSON.stringify(ground)};
   const obj = ${JSON.stringify(objects)};
+  const z = ${JSON.stringify(z)};
+  const zGate = ${JSON.stringify(zGate)};
 
   const portals = ${JSON.stringify(portalList, null, 2)};
+  const npcs = ${JSON.stringify(npcList, null, 2)};
+  const mobSpawns = ${JSON.stringify(mobSpawns, null, 2)};
 
-  return { id: ${JSON.stringify(id)}, w, h, map, obj, portals };
+  return { id: ${JSON.stringify(id)}, w, h, map, obj, z, zGate, portals, npcs, mobSpawns };
 }
 `;
 
@@ -1704,6 +2035,14 @@ tileImage.src = "/assets/tiles.png";
 const objTileImage = new Image();
 objTileImage.onload = rebuildEditorObjectTiles;
 objTileImage.src = "/assets/tiles_objects.png";
+
+// 16-tile autotile atlas (4x4)
+const autotileDirtImg = new Image();
+autotileDirtImg.onload = () => {
+  // Ensure the tile palette thumbnails refresh when this loads.
+  if (typeof editorBuildTileGrid === "function") editorBuildTileGrid();
+};
+autotileDirtImg.src = "/assets/autotile_dirtpath.png";
 // Skill 1 black hole spritesheet (8 frames vertical: 64x64 each)
 const SKILL1_BLACKHOLE = {
   src: "/assets/skills/skill_blackhole.png",
@@ -2464,7 +2803,11 @@ ws.addEventListener("open", () => {
 let myId = null;
 let map = null;
 let objMap = null;
+let zMap = null;
+let zGateMap = null;
 let currentMapId = null;
+// Minimal map metadata we keep client-side for editor exports (e.g., authored mobSpawns).
+let currentMap = null;
 let portals = []; // [{x,y,to,...}] current map portal positions
 
 let worldPlayers = {};
@@ -3187,13 +3530,22 @@ if (msg.type === "skill3Fx") {
     myId = msg.id;
     map = msg.map;
     objMap = msg.objMap || objMap;
+    if (msg.zMap) zMap = msg.zMap;
+    if (msg.zGateMap) zGateMap = msg.zGateMap;
     if (Array.isArray(msg.portals)) portals = msg.portals;
 
     currentMapId = msg.mapId ?? currentMapId;
 
+    // Keep authored map metadata (for editor export fallbacks)
+    if (msg.mapId != null) {
+      const ms = Array.isArray(msg.mobSpawns) ? msg.mobSpawns : [];
+      currentMap = { id: msg.mapId, mobSpawns: ms };
+      seedEditorMobSpawns(msg.mapId, ms);
+    }
+
     if (typeof msg.tileSize === "number") TILE_SIZE = msg.tileSize;
     if (typeof msg.portalTile === "number") PORTAL_TILE = msg.portalTile;
-    if (msg.mobCatalog && typeof msg.mobCatalog === "object") mobCatalog = msg.mobCatalog;
+    if (msg.mobCatalog && typeof msg.mobCatalog === "object") { mobCatalog = msg.mobCatalog; rebuildEditorMobTypes(); }
     if (msg.monsterBook && typeof msg.monsterBook === "object") monsterBook = msg.monsterBook;
     return;
   }
@@ -3232,8 +3584,22 @@ if (msg.type === "skill3Fx") {
     const mapChanged = (currentMapId != null && newMapId !== currentMapId);
     currentMapId = newMapId;
 
+    // Update authored metadata when provided (server now includes mobSpawns).
+    // Only *seed* the editor list when entering a map (or first time we learn its spawns),
+    // so an intentional in-editor clear (empty list) isn't undone by the next snapshot.
+    const hasMobSpawns = Array.isArray(msg.mobSpawns);
+    if (hasMobSpawns || mapChanged || !currentMap || currentMap.id !== newMapId) {
+      const ms = hasMobSpawns ? msg.mobSpawns : (currentMap?.mobSpawns || []);
+      currentMap = { id: newMapId, mobSpawns: ms };
+      if (mapChanged || !editorMobSpawnsByMapId.has(String(newMapId))) {
+        seedEditorMobSpawns(newMapId, ms);
+      }
+    }
+
     if (msg.map) map = msg.map;
     if (msg.objMap) objMap = msg.objMap;
+    if (msg.zMap) zMap = msg.zMap;
+    if (msg.zGateMap) zGateMap = msg.zGateMap;
 
 if (Array.isArray(msg.whirlpools)) whirlpools = msg.whirlpools;
     if (msg.selfMonsterBook && typeof msg.selfMonsterBook === "object") monsterBook = msg.selfMonsterBook;
@@ -3361,6 +3727,12 @@ if (Array.isArray(msg.whirlpools)) whirlpools = msg.whirlpools;
     } else if (layer === "object") {
       if (!objMap) objMap = Array.from({length: map.length}, () => Array(map[0].length).fill(0));
       objMap[ty][tx] = tile;
+    } else if (layer === "height") {
+      if (!zMap) zMap = Array.from({length: map.length}, () => Array(map[0].length).fill(0));
+      zMap[ty][tx] = tile;
+    } else if (layer === "zgate") {
+      if (!zGateMap) zGateMap = Array.from({length: map.length}, () => Array(map[0].length).fill(0));
+      zGateMap[ty][tx] = tile;
     }
     return;
   }
@@ -3969,9 +4341,11 @@ window.addEventListener("keydown", (e) => {
     e.preventDefault();
     if (!e.repeat) {
       editorOpen = !editorOpen;
+      if (editorOpen) { rebuildEditorGroundTiles(); rebuildEditorObjectTiles(); rebuildEditorMobTypes(); }
       // reset selection for layer
       editorTileIndex = 0;
-      editorSetTileIndexByValue(0);
+      const list = editorAllowedList();
+      if (list.length) editorSetTileIndexByValue(list[0]);
       levelToastText = editorOpen ? "Editor ON (TAB layer, [ ] tile, Ctrl+E export)" : "Editor OFF";
       levelToastUntilMs = performance.now() + 2200;
 
@@ -4024,13 +4398,12 @@ if (key === "F9") {
     // Don't let movement keys interfere while editing unless you want them.
     if (key === "Tab") {
       e.preventDefault();
-      editorLayer = (editorLayer === "ground") ? "object" : "ground";
+      editorNextLayer();
       editorTileIndex = 0;
       editorSetTileIndexByValue(0);
-      
       editorUpdateDomHeader();
       editorBuildTileGrid();
-return;
+      return;
     }
 
     if (key === "[") {
@@ -4223,15 +4596,51 @@ canvas.addEventListener("mousedown", (e) => {
 
   if (editorLayer === "ground") {
     // keep portals/statues intact (server also validates)
-    const curr = map[ty][tx];
     map[ty][tx] = tile;
     sendEditTile("ground", tx, ty, tile);
-  } else {
-    if (!objMap) {
-      objMap = Array.from({length: map.length}, () => Array(map[0].length).fill(0));
-    }
+    return;
+  }
+
+  if (editorLayer === "object") {
+    if (!objMap) objMap = Array.from({length: map.length}, () => Array(map[0].length).fill(0));
     objMap[ty][tx] = tile;
     sendEditTile("object", tx, ty, tile);
+    return;
+  }
+
+  if (editorLayer === "height") {
+    if (!zMap) zMap = Array.from({length: map.length}, () => Array(map[0].length).fill(0));
+    zMap[ty][tx] = tile;
+    sendEditTile("height", tx, ty, tile);
+    return;
+  }
+
+  if (editorLayer === "zgate") {
+    if (!zGateMap) zGateMap = Array.from({length: map.length}, () => Array(map[0].length).fill(0));
+    zGateMap[ty][tx] = tile ? 1 : 0;
+    sendEditTile("zgate", tx, ty, tile ? 1 : 0);
+    return;
+  }
+
+  if (editorLayer === "mobs") {
+    const id = (typeof currentMapId !== "undefined") ? currentMapId
+             : (typeof currentMap !== "undefined" && currentMap?.id != null) ? currentMap.id
+             : 1;
+    const list = getEditorMobSpawnsFor(id);
+    const idx = findMobSpawnIndexAt(list, tx, ty);
+
+    editorMobSpawnsTouched.add(String(id));
+
+    if (isRight) {
+      if (idx !== -1) list.splice(idx, 1);
+    } else {
+      const mobType = String(editorSelectedTile() || "");
+      if (!mobType) return;
+      const base = { type: mobType, x: tx, y: ty, count: 1, respawnSec: 30, leash: 8 };
+      if (idx !== -1) list[idx] = { ...list[idx], ...base };
+      else list.push(base);
+    }
+    return;
   }
 });
 
@@ -4889,18 +5298,24 @@ function drawMap() {
       const px = Math.round(x * TILE_SIZE);
       const py = Math.round(y * TILE_SIZE);
 
-      if (tileImage.complete && tileImage.naturalWidth > 0) {
-        const cell = TILE_SIZE + TILE_PAD;
-        const col = tile % TILESET_COLS;
-        const row = Math.floor(tile / TILESET_COLS);
-        const sx = col * cell;
-        const sy = row * cell;
-        ctx.drawImage(tileImage, sx, sy, TILE_SIZE, TILE_SIZE, px, py, TILE_SIZE, TILE_SIZE);
-      }
-
-
-
- else {
+      
+// Special case: 16-variant autotile (drawn from its own atlas)
+if (tile === AUTO_DIRTPATH_TILE && autotileDirtImg && autotileDirtImg.complete && autotileDirtImg.naturalWidth > 0) {
+  const cell = TILE_SIZE + TILE_PAD;
+  const mask = autoDirtPathMaskAt(x, y); // 0..15
+  const col = mask % AUTO_DIRTPATH_COLS;
+  const row = Math.floor(mask / AUTO_DIRTPATH_COLS);
+  const sx = col * cell;
+  const sy = row * cell;
+  ctx.drawImage(autotileDirtImg, sx, sy, TILE_SIZE, TILE_SIZE, px, py, TILE_SIZE, TILE_SIZE);
+} else if (tileImage.complete && tileImage.naturalWidth > 0) {
+  const cell = TILE_SIZE + TILE_PAD;
+  const col = tile % TILESET_COLS;
+  const row = Math.floor(tile / TILESET_COLS);
+  const sx = col * cell;
+  const sy = row * cell;
+  ctx.drawImage(tileImage, sx, sy, TILE_SIZE, TILE_SIZE, px, py, TILE_SIZE, TILE_SIZE);
+} else {
         ctx.fillStyle = isSolid(tile) ? "#555" : "#2b2b2b";
         ctx.fillRect(px, py, TILE_SIZE, TILE_SIZE);
       }
@@ -6585,6 +7000,98 @@ function drawEditorOverlay() {
   const endTx = Math.min(map[0].length - 1, Math.floor((camX + canvas.width) / TILE_SIZE));
   const endTy = Math.min(map.length - 1, Math.floor((camY + canvas.height) / TILE_SIZE));
 
+  // Height / Z-Gate visualization when those editor layers are active.
+  // This makes it obvious what's stored in zMap / zGateMap without changing gameplay rendering.
+  if (editorLayer === "height" || editorLayer === "zgate") {
+    for (let y = startTy; y <= endTy; y++) {
+      for (let x = startTx; x <= endTx; x++) {
+        const px = x * TILE_SIZE;
+        const py = y * TILE_SIZE;
+
+        if (editorLayer === "height") {
+          const z = (zMap && zMap[y]) ? (zMap[y][x] | 0) : 0;
+
+          // Tint: higher = darker.
+          const a = (z === 0) ? 0.04 : Math.min(0.28, 0.06 + z * 0.08);
+          ctx.fillStyle = `rgba(80, 180, 255, ${a.toFixed(3)})`;
+          ctx.fillRect(px, py, TILE_SIZE, TILE_SIZE);
+
+          // Number label (centered)
+          ctx.save();
+          ctx.font = "18px system-ui, sans-serif";
+          ctx.textAlign = "center";
+          ctx.textBaseline = "middle";
+          ctx.lineWidth = 4;
+          ctx.strokeStyle = "rgba(0,0,0,0.55)";
+          ctx.fillStyle = (z === 0) ? "rgba(255,255,255,0.45)" : "rgba(255,255,255,0.92)";
+          const cx = px + TILE_SIZE / 2;
+          const cy = py + TILE_SIZE / 2;
+          const t = String(z);
+          ctx.strokeText(t, cx, cy);
+          ctx.fillText(t, cx, cy);
+          ctx.restore();
+        } else if (editorLayer === "zgate") {
+          const zg = (zGateMap && zGateMap[y]) ? (zGateMap[y][x] ? 1 : 0) : 0;
+          if (!zg) continue;
+
+          // Green tint for gate tiles
+          ctx.fillStyle = "rgba(80, 220, 120, 0.22)";
+          ctx.fillRect(px, py, TILE_SIZE, TILE_SIZE);
+
+          // Simple label so it pops
+          ctx.save();
+          ctx.font = "16px system-ui, sans-serif";
+          ctx.textAlign = "center";
+          ctx.textBaseline = "middle";
+          ctx.lineWidth = 4;
+          ctx.strokeStyle = "rgba(0,0,0,0.60)";
+          ctx.fillStyle = "rgba(255,255,255,0.95)";
+          ctx.strokeText("G", px + TILE_SIZE / 2, py + TILE_SIZE / 2);
+          ctx.fillText("G", px + TILE_SIZE / 2, py + TILE_SIZE / 2);
+          ctx.restore();
+        }
+      }
+    }
+  }
+
+  // Mob spawn visualization (editor-only) when the mobs layer is active.
+  if (editorLayer === "mobs") {
+    const id = (typeof currentMapId !== "undefined") ? currentMapId
+             : (typeof currentMap !== "undefined" && currentMap?.id != null) ? currentMap.id
+             : 1;
+    const spawns = getEditorMobSpawnsFor(id);
+
+    for (const sp of spawns) {
+      if (!sp) continue;
+      const x = sp.x | 0;
+      const y = sp.y | 0;
+      if (x < startTx || x > endTx || y < startTy || y > endTy) continue;
+
+      const px = x * TILE_SIZE;
+      const py = y * TILE_SIZE;
+
+      ctx.fillStyle = "rgba(150, 90, 255, 0.18)";
+      ctx.fillRect(px, py, TILE_SIZE, TILE_SIZE);
+      ctx.strokeStyle = "rgba(255,255,255,0.22)";
+      ctx.strokeRect(px + 0.5, py + 0.5, TILE_SIZE - 1, TILE_SIZE - 1);
+
+      const nm = mobCatalog?.[sp.type]?.name || sp.type || "mob";
+      const ct = (sp.count | 0) || 1;
+
+      ctx.save();
+      ctx.font = "12px system-ui, sans-serif";
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      ctx.lineWidth = 4;
+      ctx.strokeStyle = "rgba(0,0,0,0.65)";
+      ctx.fillStyle = "rgba(255,255,255,0.95)";
+      const t = (nm.length > 8 ? nm.slice(0, 8) + "…" : nm) + (ct > 1 ? ` x${ct}` : "");
+      ctx.strokeText(t, px + TILE_SIZE / 2, py + TILE_SIZE / 2);
+      ctx.fillText(t, px + TILE_SIZE / 2, py + TILE_SIZE / 2);
+      ctx.restore();
+    }
+  }
+
   if (editorShowGrid) {
     // Grid should be in world-space (aligned to tiles), so we draw it using world coords.
     ctx.strokeStyle = "rgba(255,255,255,0.08)";
@@ -6640,7 +7147,6 @@ function drawEditorOverlay() {
   editorUpdateDomStatus();
 
   ctx.restore();
-  return;
 
   // Screen-space panel
   const list = editorAllowedList();

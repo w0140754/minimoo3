@@ -310,7 +310,17 @@ function cloneMap(m) {
     h: m.h,
     map: clone2D(m.map),
     obj: m.obj ? clone2D(m.obj) : makeEmptyLayer(m.w, m.h, 0),
+    // Height system (z levels) — optional per-map layers.
+    // If missing in templates, default to 0 everywhere so existing maps keep working.
+    z: m.z ? clone2D(m.z) : makeEmptyLayer(m.w, m.h, 0),
+    // Transition tiles where a z-change is allowed (stairs/ramps/transition). 0/1 grid.
+    zGate: m.zGate ? clone2D(m.zGate) : makeEmptyLayer(m.w, m.h, 0),
     portals: clonePortals(m.portals),
+
+    // Authored mob spawn points (not live mobs). Keep them on the live map object so
+    // the client/editor can export without losing pre-existing spawns.
+    // Accept both the preferred `mobSpawns` and legacy `mobs` field from older exports.
+    mobSpawns: (m.mobSpawns || m.mobs || []).map(s => ({ ...s })),
   };
 }
 
@@ -474,6 +484,48 @@ function playerFootTile(p) {
   const fx = p.x;
   const fy = p.y + PLAYER_FOOT_OFFSET_Y;
   return { tx: Math.floor(fx / TILE), ty: Math.floor(fy / TILE), fx, fy };
+}
+
+// ======================
+// HEIGHT / Z-LEVEL SYSTEM
+// ======================
+// Tiles have an integer z-level stored in map.z[ty][tx] (defaults to 0 if missing).
+// Crossing into a tile with a different z-level is blocked unless either the source
+// or destination tile is marked in map.zGate[ty][tx] (stairs/ramps/transition).
+function tileZ(mapId, tx, ty) {
+  const m = maps[mapId];
+  if (!m) return 0;
+  if (tx < 0 || ty < 0 || tx >= m.w || ty >= m.h) return 0;
+  const row = m.z && m.z[ty];
+  const z = row ? row[tx] : 0;
+  return Number.isFinite(z) ? (z | 0) : 0;
+}
+
+function tileZGate(mapId, tx, ty) {
+  const m = maps[mapId];
+  if (!m) return 0;
+  if (tx < 0 || ty < 0 || tx >= m.w || ty >= m.h) return 0;
+  const row = m.zGate && m.zGate[ty];
+  const v = row ? row[tx] : 0;
+  return v ? 1 : 0;
+}
+
+function canCrossZ(mapId, fromTx, fromTy, toTx, toTy) {
+  if (fromTx === toTx && fromTy === toTy) return true;
+  const z0 = tileZ(mapId, fromTx, fromTy);
+  const z1 = tileZ(mapId, toTx, toTy);
+  if (z0 === z1) return true;
+  // Different z: only allowed at a transition marker (source OR destination).
+  return !!(tileZGate(mapId, fromTx, fromTy) || tileZGate(mapId, toTx, toTy));
+}
+
+// Player uses a foot point for collision; use that same point to evaluate z-level crossing.
+function canMovePlayerZ(mapId, fromX, fromY, toX, toY) {
+  const fromTx = Math.floor(fromX / TILE);
+  const fromTy = Math.floor((fromY + PLAYER_FOOT_OFFSET_Y) / TILE);
+  const toTx = Math.floor(toX / TILE);
+  const toTy = Math.floor((toY + PLAYER_FOOT_OFFSET_Y) / TILE);
+  return canCrossZ(mapId, fromTx, fromTy, toTx, toTy);
 }
 
 
@@ -1460,7 +1512,26 @@ function initStaticEntitiesFromTemplates() {
       spawnNpc({ ...npc, mapId: npc.mapId || mapId });
     }
 
-    const mobList = tmpl.mobSpawns || [];
+    // Mobs can be authored as `mobSpawns` (preferred) or legacy `mobs` from older editor exports.
+    const mobListRaw = tmpl.mobSpawns || tmpl.mobs || [];
+    const mobList = mobListRaw.map((s) => {
+      if (s && (s.mobType != null) && (Number.isFinite(s.tx) || Number.isFinite(s.x))) return s;
+      // normalize legacy {type,x,y} into {mobType,tx,ty}
+      const mobType = s && (s.mobType ?? s.type);
+      const tx = s && (Number.isFinite(s.tx) ? s.tx : (Number.isFinite(s.x) ? s.x : undefined));
+      const ty = s && (Number.isFinite(s.ty) ? s.ty : (Number.isFinite(s.y) ? s.y : undefined));
+      const out = {
+        ...(s && s.id ? { id: s.id } : {}),
+        ...(s && s.mapId ? { mapId: s.mapId } : {}),
+        mobType,
+        ...(Number.isFinite(tx) ? { tx } : {}),
+        ...(Number.isFinite(ty) ? { ty } : {}),
+      };
+      if (s && s.speedMul != null) out.speedMul = s.speedMul;
+      if (s && s.aggroSpeedMul != null) out.aggroSpeedMul = s.aggroSpeedMul;
+      if (s && s.passiveUntilHit != null) out.passiveUntilHit = s.passiveUntilHit;
+      return out;
+    });
     for (let i = 0; i < mobList.length; i++) {
       const s = mobList[i];
       const id = s.id || `${mapId}_${s.mobType}_${i + 1}`;
@@ -1921,7 +1992,12 @@ skill4CdUntilMs: 0,
     mapId,
     map: m.map,
     objMap: m.obj,
+    zMap: m.z,
+    zGateMap: m.zGate,
     portals: m.portals || [],
+    // Authored mob spawn points (not live mobs). Used by the in-game editor export so
+    // existing spawns don't disappear when you export without editing mobs.
+    mobSpawns: m.mobSpawns || [],
     tileSize: TILE,
     mapW: m.w,
     mapH: m.h,
@@ -2829,6 +2905,49 @@ if (msg.type === "editTile") {
         return;
       }
 
+
+      if (layer === "height") {
+        if (!m0.z) m0.z = makeEmptyLayer(m0.w, m0.h, 0);
+        let ok = true;
+        let reason = "ok";
+        if (tile < 0 || tile > 9) { ok = false; reason = "invalid_height"; }
+
+        if (MAP_EDITOR_DEBUG_LOG) {
+          console.log(`[EDITOR]  height  (,) ->  ()`);
+        }
+
+        if (!ok) {
+          send(ws, { type: "editAck", ok: false, layer: "height", x: tx, y: ty, tile, reason });
+          return;
+        }
+
+        m0.z[ty][tx] = tile;
+        broadcastToMap(p.mapId, { type: "mapPatch", mapId: p.mapId, layer: "height", x: tx, y: ty, tile });
+        send(ws, { type: "editAck", ok: true, layer: "height", x: tx, y: ty, tile });
+        return;
+      }
+
+      if (layer === "zgate") {
+        if (!m0.zGate) m0.zGate = makeEmptyLayer(m0.w, m0.h, 0);
+        let ok = true;
+        let reason = "ok";
+        if (tile !== 0 && tile !== 1) { ok = false; reason = "invalid_zgate"; }
+
+        if (MAP_EDITOR_DEBUG_LOG) {
+          console.log(`[EDITOR]  zgate  (,) ->  ()`);
+        }
+
+        if (!ok) {
+          send(ws, { type: "editAck", ok: false, layer: "zgate", x: tx, y: ty, tile, reason });
+          return;
+        }
+
+        m0.zGate[ty][tx] = tile;
+        broadcastToMap(p.mapId, { type: "mapPatch", mapId: p.mapId, layer: "zgate", x: tx, y: ty, tile });
+        send(ws, { type: "editAck", ok: true, layer: "zgate", x: tx, y: ty, tile });
+        return;
+      }
+
       return;
     }
 
@@ -3291,8 +3410,8 @@ function tickStep(dt) {
       const nx = p.x + dx * moveSpeed * dt;
       const ny = p.y + dy * moveSpeed * dt;
 
-      if (!collidesPlayer(p.mapId, nx, p.y)) p.x = nx;
-      if (!collidesPlayer(p.mapId, p.x, ny)) p.y = ny;
+      if (canMovePlayerZ(p.mapId, p.x, p.y, nx, p.y) && !collidesPlayer(p.mapId, nx, p.y)) p.x = nx;
+      if (canMovePlayerZ(p.mapId, p.x, p.y, p.x, ny) && !collidesPlayer(p.mapId, p.x, ny)) p.y = ny;
 
       clampToWorldPlayer(p.mapId, p);
 
@@ -3879,7 +3998,12 @@ setInterval(() => {
       mapId,
       map: m.map,
       objMap: m.obj,
+      // Height/transition layers (painted in editor). Defaults to 0/empty.
+      zMap: m.z,
+      zGateMap: m.zGate,
       portals: m.portals || [],
+      // Authored mob spawn points (not live mobs). See welcome comment.
+      mobSpawns: m.mobSpawns || [],
       mapW: m.w,
       mapH: m.h,
       tileSize: TILE,
