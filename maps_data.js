@@ -184,34 +184,7 @@ export function makeMapC() {
     "ty": 5,
     "speedMul": 0.5
   },
-  {
-    "mobType": "orange",
-    "tx": 10,
-    "ty": 6
-  },
-  {
-    "mobType": "orange",
-    "tx": 11,
-    "ty": 6
-  },
-  {
-    "mobType": "green",
-    "tx": 3,
-    "ty": 7,
-    "speedMul": 0.5
-  },
-  {
-    "mobType": "green",
-    "tx": 4,
-    "ty": 7,
-    "speedMul": 0.5
-  },
-  {
-    "mobType": "orange",
-    "tx": 10,
-    "ty": 7
-  }
-];
+;
 
   return { id: "C", w, h, map, obj, z, zGate, portals, npcs, mobSpawns };
 }
