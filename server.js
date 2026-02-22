@@ -521,12 +521,98 @@ function canCrossZ(mapId, fromTx, fromTy, toTx, toTy) {
 
 // Player uses a foot point for collision; use that same point to evaluate z-level crossing.
 function canMovePlayerZ(mapId, fromX, fromY, toX, toY) {
-  const fromTx = Math.floor(fromX / TILE);
-  const fromTy = Math.floor((fromY + PLAYER_FOOT_OFFSET_Y) / TILE);
-  const toTx = Math.floor(toX / TILE);
-  const toTy = Math.floor((toY + PLAYER_FOOT_OFFSET_Y) / TILE);
-  return canCrossZ(mapId, fromTx, fromTy, toTx, toTy);
+  // Use the *foot circle* (center + radius) for Z checks, same as collision.
+  const fromFx = fromX;
+  const fromFy = fromY + PLAYER_FOOT_OFFSET_Y;
+  const toFx = toX;
+  const toFy = toY + PLAYER_FOOT_OFFSET_Y;
+
+  const fromTx = Math.floor(fromFx / TILE);
+  const fromTy = Math.floor(fromFy / TILE);
+
+  // If we don't have a meaningful radius, fall back to center-point logic.
+  const radius = PLAYER_FOOT_RADIUS;
+  if (!Number.isFinite(radius) || radius <= 0) {
+    const toTx = Math.floor(toFx / TILE);
+    const toTy = Math.floor(toFy / TILE);
+    return canCrossZ(mapId, fromTx, fromTy, toTx, toTy);
+  }
+
+  const z0 = tileZ(mapId, fromTx, fromTy);
+
+  const minTx = Math.floor((toFx - radius) / TILE);
+  const maxTx = Math.floor((toFx + radius) / TILE);
+  const minTy = Math.floor((toFy - radius) / TILE);
+  const maxTy = Math.floor((toFy + radius) / TILE);
+
+  // If the foot circle would overlap a different Z, require a gate.
+  let overlapsDifferentZ = false;
+  for (let ty = minTy; ty <= maxTy; ty++) {
+    for (let tx = minTx; tx <= maxTx; tx++) {
+      const z = tileZ(mapId, tx, ty);
+      if (z !== z0) { overlapsDifferentZ = true; break; }
+    }
+    if (overlapsDifferentZ) break;
+  }
+  if (!overlapsDifferentZ) return true;
+
+  // Gate can be on the origin tile OR any tile we are occupying at the destination.
+  if (tileZGate(mapId, fromTx, fromTy)) return true;
+  for (let ty = minTy; ty <= maxTy; ty++) {
+    for (let tx = minTx; tx <= maxTx; tx++) {
+      if (tileZGate(mapId, tx, ty)) return true;
+    }
+  }
+  return false;
 }
+
+
+
+// Mobs are circles; to prevent "half a tile" of slipping onto a different Z,
+// we evaluate the *occupied tiles* of the mob's circle at the proposed position.
+// Rule:
+// - If every occupied tile is the same Z as the mob's current tile => OK.
+// - If occupied tiles include a different Z => only OK if there is a zGate tile
+//   either under the mob currently OR under the mob at the proposed position.
+function canMoveMobZ(mapId, fromX, fromY, toX, toY, radius = 0) {
+  const fromTx = Math.floor(fromX / TILE);
+  const fromTy = Math.floor(fromY / TILE);
+
+  // If we don't have a meaningful radius, fall back to center-point logic.
+  if (!Number.isFinite(radius) || radius <= 0) {
+    const toTx = Math.floor(toX / TILE);
+    const toTy = Math.floor(toY / TILE);
+    return canCrossZ(mapId, fromTx, fromTy, toTx, toTy);
+  }
+
+  const z0 = tileZ(mapId, fromTx, fromTy);
+
+  const minTx = Math.floor((toX - radius) / TILE);
+  const maxTx = Math.floor((toX + radius) / TILE);
+  const minTy = Math.floor((toY - radius) / TILE);
+  const maxTy = Math.floor((toY + radius) / TILE);
+
+  // If we're about to overlap multiple Z values, require a gate.
+  let overlapsDifferentZ = false;
+  for (let ty = minTy; ty <= maxTy; ty++) {
+    for (let tx = minTx; tx <= maxTx; tx++) {
+      const z = tileZ(mapId, tx, ty);
+      if (z !== z0) { overlapsDifferentZ = true; break; }
+    }
+    if (overlapsDifferentZ) break;
+  }
+  if (!overlapsDifferentZ) return true;
+
+  // Gate can be on the origin tile OR any tile we are occupying at the destination.
+  if (tileZGate(mapId, fromTx, fromTy)) return true;
+  for (let ty = minTy; ty <= maxTy; ty++) {
+    for (let tx = minTx; tx <= maxTx; tx++) {
+      if (tileZGate(mapId, tx, ty)) return true;
+    }
+  }
+  return false;
+}
+
 
 
 function clampToWorld(mapId, p, radius) {
@@ -3267,8 +3353,8 @@ function moveMobWithSlide(m, stepX, stepY, radius, target = null) {
   let moved = false;
 
   // Standard "slide" (x then y)
-  if (!collides(m.mapId, m.x + stepX, m.y, radius)) { m.x += stepX; moved = true; }
-  if (!collides(m.mapId, m.x, m.y + stepY, radius)) { m.y += stepY; moved = true; }
+  if (canMoveMobZ(m.mapId, m.x, m.y, m.x + stepX, m.y, radius) && !collides(m.mapId, m.x + stepX, m.y, radius)) { m.x += stepX; moved = true; }
+  if (canMoveMobZ(m.mapId, m.x, m.y, m.x, m.y + stepY, radius) && !collides(m.mapId, m.x, m.y + stepY, radius)) { m.y += stepY; moved = true; }
 
   if (moved) return true;
 
@@ -3288,8 +3374,8 @@ function moveMobWithSlide(m, stepX, stepY, radius, target = null) {
     const ox = m.x, oy = m.y;
     let ok = false;
 
-    if (!collides(m.mapId, ox + sx, oy, radius)) { m.x = ox + sx; ok = true; } else { m.x = ox; }
-    if (!collides(m.mapId, m.x, oy + sy, radius)) { m.y = oy + sy; ok = true; } else { m.y = oy; }
+    if (canMoveMobZ(m.mapId, ox, oy, ox + sx, oy, radius) && !collides(m.mapId, ox + sx, oy, radius)) { m.x = ox + sx; ok = true; } else { m.x = ox; }
+    if (canMoveMobZ(m.mapId, m.x, oy, m.x, oy + sy, radius) && !collides(m.mapId, m.x, oy + sy, radius)) { m.y = oy + sy; ok = true; } else { m.y = oy; }
 
     if (!ok) { m.x = ox; m.y = oy; }
     return ok;
@@ -3723,8 +3809,8 @@ function tickStep(dt) {
             const nx = target.x + kx;
             const ny = target.y + ky;
 
-            if (!collidesPlayer(target.mapId, nx, target.y)) target.x = nx;
-            if (!collidesPlayer(target.mapId, target.x, ny)) target.y = ny;
+            if (canMovePlayerZ(target.mapId, target.x, target.y, nx, target.y) && !collidesPlayer(target.mapId, nx, target.y)) target.x = nx;
+            if (canMovePlayerZ(target.mapId, target.x, target.y, target.x, ny) && !collidesPlayer(target.mapId, target.x, ny)) target.y = ny;
             clampToWorldPlayer(target.mapId, target);
 
             broadcastToMap(target.mapId, {

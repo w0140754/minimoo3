@@ -136,6 +136,36 @@
 }
 .tile-btn canvas{width:100%; height:100%; image-rendering: pixelated;}
 .editor-meta{font-size:12px; opacity:0.85; margin-top:8px; line-height:1.3;}
+
+/* --- Mob spawn attribute panel (appears under palette when Layer: MOBS) --- */
+.editor-mobprops{
+  margin-top: 10px;
+  padding: 10px;
+  border-radius: 14px;
+  border: 1px solid rgba(90,180,255,0.55);
+  background: rgba(0,0,0,0.28);
+}
+.editor-mobprops.hidden{display:none;}
+.mobprops-title{font-size:12px; font-weight:800; margin-bottom:6px; opacity:0.95;}
+.mobprops-hint{font-size:12px; opacity:0.75; margin-bottom:10px; line-height:1.3;}
+.mobprops-grid{display:grid; grid-template-columns: 1fr; gap:8px;}
+.mobprops-row{display:grid; grid-template-columns: 120px 1fr; gap:10px; align-items:center;}
+.mobprops-row label{font-size:12px; opacity:0.9;}
+.mobprops-row input[type="number"]{width:100%;}
+.mobprops-row input[type="checkbox"]{width:18px; height:18px; justify-self:start;}
+.mobprops-readonly{font-size:12px; opacity:0.92; padding:6px 8px; border-radius:10px; background: rgba(255,255,255,0.06); border:1px solid rgba(255,255,255,0.12);}
+.mobprops-actions{display:flex; gap:8px; justify-content:flex-end; margin-top:10px;}
+.mobprops-actions button{
+  background: rgba(255,255,255,0.08);
+  border: 1px solid rgba(255,255,255,0.14);
+  color:#fff;
+  border-radius: 10px;
+  padding: 7px 10px;
+  cursor:pointer;
+  font-size: 12px;
+}
+.mobprops-actions button:hover{background: rgba(255,255,255,0.12);}
+
 @media (max-width: 900px){
   .app-layout{flex-direction:column;}
   .editor-panel{width: min(720px, 96vw);}
@@ -145,7 +175,7 @@
   </style>
 <meta content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no" name="viewport"/><meta content="#000000" name="theme-color"/><meta content="yes" name="apple-mobile-web-app-capable"/><meta content="black-translucent" name="apple-mobile-web-app-status-bar-style"/><meta content="Mini MMO" name="apple-mobile-web-app-title"/><link href="/manifest.webmanifest" rel="manifest"/><link href="/icons/icon-180.png" rel="apple-touch-icon"/></head>
 <body>
-<h1>Mini MMO</h1>
+<h1>Mini MMO23</h1>
 <p>WASD / Arrow keys • Press <b>E</b> near NPC / portal • Left-click to attack • Press <b>I</b> (or ☰) for inventory • Press <b>K</b> for skills</p>
 <div class="app-layout" id="appLayout">
 <div class="game-wrap" id="gameWrap">
@@ -173,7 +203,62 @@
       </div>
       <div class="editor-meta" id="editorStatus">Cursor: —</div>
       <div class="tile-grid" id="editorTileGrid"></div>
-      <div class="editor-meta" id="editorMeta">Select a tile.</div>
+            <div class="editor-meta" id="editorMeta">Select a tile.</div>
+      <div class="editor-mobprops hidden" id="editorMobProps" aria-label="Mob spawn properties">
+        <div class="mobprops-title">Mob Spawn</div>
+        <div class="mobprops-hint" id="editorMobPropsHint">Click a mob spawn on the map to edit its attributes.</div>
+
+        <div class="mobprops-grid" id="editorMobPropsGrid">
+          <div class="mobprops-row">
+            <label>Type</label>
+            <div class="mobprops-readonly" id="mobPropType">—</div>
+          </div>
+          <div class="mobprops-row">
+            <label>Tile</label>
+            <div class="mobprops-readonly" id="mobPropPos">—</div>
+          </div>
+
+          <div class="mobprops-row">
+            <label for="mobPropCount">Count</label>
+            <input id="mobPropCount" type="number" min="1" step="1" value="1"/>
+          </div>
+          <div class="mobprops-row">
+            <label for="mobPropRespawn">Respawn (s)</label>
+            <input id="mobPropRespawn" type="number" min="0" step="1" value="30"/>
+          </div>
+          <div class="mobprops-row">
+            <label for="mobPropLeash">Leash (tiles)</label>
+            <input id="mobPropLeash" type="number" min="0" step="1" value="8"/>
+          </div>
+          <div class="mobprops-row">
+            <label for="mobPropAggroRadius">Aggro radius</label>
+            <input id="mobPropAggroRadius" type="number" min="0" step="1" value="6"/>
+          </div>
+
+          <div class="mobprops-row">
+            <label for="mobPropPassive">Passive until hit</label>
+            <input id="mobPropPassive" type="checkbox"/>
+          </div>
+
+          <div class="mobprops-row">
+            <label for="mobPropSpeed">Speed ×</label>
+            <input id="mobPropSpeed" type="number" min="0.1" step="0.1" value="1"/>
+          </div>
+          <div class="mobprops-row">
+            <label for="mobPropAggroSpeed">Aggro speed ×</label>
+            <input id="mobPropAggroSpeed" type="number" min="0.1" step="0.1" value="1"/>
+          </div>
+          <div class="mobprops-row">
+            <label for="mobPropMaxHp">Max HP (override)</label>
+            <input id="mobPropMaxHp" type="number" min="1" step="1" value="" placeholder="(use mob default)"/>
+          </div>
+        </div>
+
+        <div class="mobprops-actions">
+          <button type="button" id="mobPropApplyDefaults">Defaults</button>
+          <button type="button" id="mobPropDelete">Delete</button>
+        </div>
+      </div>
     </div>
 </div>
 <script src="/mobile_controls.js"></script><script>
@@ -1307,7 +1392,20 @@ function seedEditorMobSpawns(mapId, mobSpawns) {
     const ty = Number.isFinite(s.ty) ? s.ty : (Number.isFinite(s.y) ? s.y : null);
     if (!Number.isFinite(tx) || !Number.isFinite(ty)) continue;
     // Editor list format prefers x/y for hit-testing and painting.
-    list.push({ type: mobType, x: tx, y: ty, tx, ty, ...(s.id ? { id: s.id } : {}), ...(s.mapId ? { mapId: s.mapId } : {}) });
+    list.push({
+      type: mobType,
+      x: tx, y: ty, tx, ty,
+      ...(s.id ? { id: s.id } : {}),
+      ...(s.mapId ? { mapId: s.mapId } : {}),
+      ...(s.count != null ? { count: s.count } : {}),
+      ...(s.respawnSec != null ? { respawnSec: s.respawnSec } : {}),
+      ...(s.leash != null ? { leash: s.leash } : {}),
+      ...(s.speedMul != null ? { speedMul: s.speedMul } : {}),
+      ...(s.aggroSpeedMul != null ? { aggroSpeedMul: s.aggroSpeedMul } : {}),
+      ...(s.passiveUntilHit != null ? { passiveUntilHit: s.passiveUntilHit } : {}),
+      ...(s.maxHp != null ? { maxHp: s.maxHp } : {}),
+      ...(s.aggroRadius != null ? { aggroRadius: s.aggroRadius } : {}),
+    });
   }
 }
 
@@ -1318,6 +1416,148 @@ function findMobSpawnIndexAt(list, x, y) {
     if ((s.x|0) === (x|0) && (s.y|0) === (y|0)) return i;
   }
   return -1;
+}
+
+
+// Currently selected mob spawn in the editor (for the Mob Spawn panel).
+let editorSelectedMobSpawn = null; // { mapId, x, y }
+
+// Read current map id consistently in editor code.
+function editorGetCurrentMapId() {
+  return (typeof currentMapId !== "undefined") ? currentMapId
+       : (typeof currentMap !== "undefined" && currentMap?.id != null) ? currentMap.id
+       : 1;
+}
+
+function editorGetSelectedSpawnIndex() {
+  if (!editorSelectedMobSpawn) return -1;
+  const id = String(editorSelectedMobSpawn.mapId ?? "");
+  const list = getEditorMobSpawnsFor(id);
+  return findMobSpawnIndexAt(list, editorSelectedMobSpawn.x, editorSelectedMobSpawn.y);
+}
+
+function editorGetSelectedSpawn() {
+  if (!editorSelectedMobSpawn) return null;
+  const id = String(editorSelectedMobSpawn.mapId ?? "");
+  const list = getEditorMobSpawnsFor(id);
+  const idx = editorGetSelectedSpawnIndex();
+  if (idx < 0) return null;
+  return { list, idx, sp: list[idx] };
+}
+
+function setEditorMobPropsVisible(vis) {
+  const box = document.getElementById("editorMobProps");
+  if (!box) return;
+  box.classList.toggle("hidden", !vis);
+}
+
+function editorDefaultSpawnForType(mobType, tx, ty) {
+  // Keep these modest; server should clamp/validate when it consumes mobSpawns.
+  const cat = (typeof mobCatalog === "object" && mobCatalog) ? mobCatalog[mobType] : null;
+  const defAggroRadius = 6;
+  return {
+    type: String(mobType || "unknown"),
+    x: tx, y: ty,
+    count: 1,
+    respawnSec: 30,
+    leash: 8,
+    aggroRadius: defAggroRadius,
+    passiveUntilHit: false,
+    speedMul: 1,
+    aggroSpeedMul: 1,
+    // Leave maxHp undefined by default; if set, it overrides cat.maxHp.
+    ...(cat && typeof cat.maxHp === "number" ? {} : {}),
+  };
+}
+
+function editorClampNum(v, minV, maxV, fallback) {
+  const n = Number(v);
+  if (!Number.isFinite(n)) return fallback;
+  if (minV != null && n < minV) return minV;
+  if (maxV != null && n > maxV) return maxV;
+  return n;
+}
+
+function editorUpdateMobPropsPanel() {
+  // Only relevant when editor is open and the mobs layer is active.
+  if (!editorOpen || editorLayer !== "mobs") { setEditorMobPropsVisible(false); return; }
+
+  setEditorMobPropsVisible(true);
+
+  const hint = document.getElementById("editorMobPropsHint");
+  const grid = document.getElementById("editorMobPropsGrid");
+
+  const sel = editorGetSelectedSpawn();
+  const typeEl = document.getElementById("mobPropType");
+  const posEl  = document.getElementById("mobPropPos");
+  const inCount = document.getElementById("mobPropCount");
+  const inResp  = document.getElementById("mobPropRespawn");
+  const inLeash = document.getElementById("mobPropLeash");
+  const inAggroRad = document.getElementById("mobPropAggroRadius");
+  const inPassive = document.getElementById("mobPropPassive");
+  const inSpeed = document.getElementById("mobPropSpeed");
+  const inAggroSpeed = document.getElementById("mobPropAggroSpeed");
+  const inMaxHp = document.getElementById("mobPropMaxHp");
+
+  if (!sel || !sel.sp) {
+    if (hint) hint.textContent = "Click a mob spawn on the map to edit its attributes.";
+    if (grid) grid.style.opacity = "0.45";
+    if (typeEl) typeEl.textContent = "—";
+    if (posEl) posEl.textContent = "—";
+    if (inMaxHp) inMaxHp.value = "";
+    return;
+  }
+
+  const sp = sel.sp;
+  if (hint) hint.textContent = "Editing the selected mob spawn. (Shift+click an existing spawn to select without changing its type.)";
+  if (grid) grid.style.opacity = "1";
+
+  const mobType = String(sp.type || sp.mobType || "unknown");
+  const name = mobCatalog?.[mobType]?.name || mobType;
+
+  if (typeEl) typeEl.textContent = name;
+  if (posEl) posEl.textContent = `(${sp.x|0}, ${sp.y|0})`;
+
+  if (inCount) inCount.value = String((sp.count|0) || 1);
+  if (inResp) inResp.value = String(Number.isFinite(sp.respawnSec) ? sp.respawnSec : 30);
+  if (inLeash) inLeash.value = String(Number.isFinite(sp.leash) ? sp.leash : 8);
+  if (inAggroRad) inAggroRad.value = String(Number.isFinite(sp.aggroRadius) ? sp.aggroRadius : 6);
+
+  if (inPassive) inPassive.checked = !!sp.passiveUntilHit;
+  if (inSpeed) inSpeed.value = String(Number.isFinite(sp.speedMul) ? sp.speedMul : 1);
+  if (inAggroSpeed) inAggroSpeed.value = String(Number.isFinite(sp.aggroSpeedMul) ? sp.aggroSpeedMul : 1);
+  if (inMaxHp) inMaxHp.value = (sp.maxHp != null && Number.isFinite(Number(sp.maxHp))) ? String(sp.maxHp) : "";
+}
+
+function editorApplyMobPropsFromInputs() {
+  const sel = editorGetSelectedSpawn();
+  if (!sel || !sel.sp) return;
+  const sp = sel.sp;
+
+  const inCount = document.getElementById("mobPropCount");
+  const inResp  = document.getElementById("mobPropRespawn");
+  const inLeash = document.getElementById("mobPropLeash");
+  const inAggroRad = document.getElementById("mobPropAggroRadius");
+  const inPassive = document.getElementById("mobPropPassive");
+  const inSpeed = document.getElementById("mobPropSpeed");
+  const inAggroSpeed = document.getElementById("mobPropAggroSpeed");
+  const inMaxHp = document.getElementById("mobPropMaxHp");
+
+  sp.count = editorClampNum(inCount?.value, 1, 999, 1) | 0;
+  sp.respawnSec = editorClampNum(inResp?.value, 0, 3600, 30) | 0;
+  sp.leash = editorClampNum(inLeash?.value, 0, 999, 8) | 0;
+  sp.aggroRadius = editorClampNum(inAggroRad?.value, 0, 999, 6) | 0;
+
+  sp.passiveUntilHit = !!(inPassive && inPassive.checked);
+  sp.speedMul = editorClampNum(inSpeed?.value, 0.1, 10, 1);
+  sp.aggroSpeedMul = editorClampNum(inAggroSpeed?.value, 0.1, 10, 1);
+
+  const mh = inMaxHp ? Number(inMaxHp.value) : NaN;
+  if (Number.isFinite(mh) && mh > 0) sp.maxHp = Math.floor(mh);
+  else delete sp.maxHp;
+
+  // Mark as touched so export uses the edited list.
+  editorMobSpawnsTouched.add(String(editorGetCurrentMapId()));
 }
 
 
@@ -1357,6 +1597,13 @@ function editorUpdateDomHeader(){
   if (layerBtn) layerBtn.textContent = `Layer: ${editorLayer.toUpperCase()}`;
   if (gridBtn)  gridBtn.textContent  = `Grid: ${editorShowGrid ? "ON" : "OFF"}`;
   if (collBtn)  collBtn.textContent  = `Coll: ${editorShowColl ? "ON" : "OFF"}`;
+
+  // Toggle the Mob Spawn attribute panel based on active layer.
+  const mobBox = document.getElementById("editorMobProps");
+  if (mobBox) {
+    if (editorLayer === "mobs") mobBox.classList.remove("hidden");
+    else mobBox.classList.add("hidden");
+  }
 }
 
 function editorUpdateDomStatus(){
@@ -1506,9 +1753,10 @@ function editorBuildTileGrid(){
     btn.addEventListener("click", () => {
       editorSetTileIndexByValue(tile);
       editorBuildTileGrid();
+    editorUpdateMobPropsPanel();
       editorUpdateDomHeader();
       const meta = document.getElementById("editorMeta");
-      if (meta) meta.textContent = (editorLayer === "mobs") ? `Selected mob: ${tile} • Left click places, Right click removes` : `Selected: ${editorLayer} tile ${tile} • Left click paints, Right click erases`;
+      if (meta) meta.textContent = (editorLayer === "mobs") ? `Selected mob:  • Left click places/selects, Shift+click overwrites, Right click removes` : `Selected: ${editorLayer} tile ${tile} • Left click paints, Right click erases`;
     });
     grid.appendChild(btn);
   }
@@ -1532,6 +1780,7 @@ function editorInitDomPanelOnce(){
     if (list.length) editorSetTileIndexByValue(list[0]);
     editorUpdateDomHeader();
     editorBuildTileGrid();
+    editorUpdateMobPropsPanel();
   });
 
   gridBtn?.addEventListener("click", () => {
@@ -1553,10 +1802,64 @@ editorUpdateDomHeader();
   });
 
   search?.addEventListener("input", () => editorBuildTileGrid());
+
+  // Mob properties panel (only active on Layer: MOBS)
+  const mobPropsBox = document.getElementById("editorMobProps");
+  const applyDefaultsBtn = document.getElementById("mobPropApplyDefaults");
+  const delBtn = document.getElementById("mobPropDelete");
+
+  function wireMobInput(id) {
+    const el = document.getElementById(id);
+    if (!el) return;
+    el.addEventListener("input", () => {
+      editorApplyMobPropsFromInputs();
+      editorUpdateMobPropsPanel();
+    });
+    el.addEventListener("change", () => {
+      editorApplyMobPropsFromInputs();
+      editorUpdateMobPropsPanel();
+    });
+  }
+
+  wireMobInput("mobPropCount");
+  wireMobInput("mobPropRespawn");
+  wireMobInput("mobPropLeash");
+  wireMobInput("mobPropAggroRadius");
+  wireMobInput("mobPropPassive");
+  wireMobInput("mobPropSpeed");
+  wireMobInput("mobPropAggroSpeed");
+  wireMobInput("mobPropMaxHp");
+
+  applyDefaultsBtn?.addEventListener("click", () => {
+    const sel = editorGetSelectedSpawn();
+    if (!sel || !sel.sp) return;
+    const mobType = String(sel.sp.type || sel.sp.mobType || "");
+    const def = editorDefaultSpawnForType(mobType, sel.sp.x|0, sel.sp.y|0);
+    // Keep position/type; reset tunables
+    for (const k of ["count","respawnSec","leash","aggroRadius","passiveUntilHit","speedMul","aggroSpeedMul"]) {
+      sel.sp[k] = def[k];
+    }
+    delete sel.sp.maxHp;
+    editorMobSpawnsTouched.add(String(editorGetCurrentMapId()));
+    editorUpdateMobPropsPanel();
+  });
+
+  delBtn?.addEventListener("click", () => {
+    const sel = editorGetSelectedSpawn();
+    if (!sel) return;
+    sel.list.splice(sel.idx, 1);
+    editorSelectedMobSpawn = null;
+    editorMobSpawnsTouched.add(String(editorGetCurrentMapId()));
+    editorUpdateMobPropsPanel();
+  });
+
+  // Initial visibility sync
+  if (mobPropsBox) editorUpdateMobPropsPanel();
+
 }
 
 // Re-use your existing Ctrl+E export logic by dispatching a synthetic hotkey.
-function exportCurrentMapToClipboard(){
+function exportCurrentMapToClipboardHotkey(){
   const evt = new KeyboardEvent("keydown", { key: "e", ctrlKey: true, bubbles: true });
   window.dispatchEvent(evt);
 }
@@ -1739,78 +2042,23 @@ async function exportCurrentMapToClipboard() {
 // Primary source: editorMobSpawnsByMapId (what you paint in the editor)
 // Fallback source: currentMap.mobSpawns (so legacy map data still exports even if you never "touched" mobs in-editor)
   const mobs = (() => {
-    const editorList = getEditorMobSpawnsFor(id) || [];
+    const mapKey = String(id);
 
     // Base authored mob spawns from the map data (legacy)
     const baseList = (typeof currentMap !== "undefined" && currentMap && Array.isArray(currentMap.mobSpawns))
-      ? currentMap.mobSpawns.map((s) => {
-          if (!s) return null;
-          // Normalize into the editor's expected fields (type/tx/ty) while preserving tuning fields.
-          const mobType = s.mobType ?? s.type ?? s.mob ?? s.kind ?? "unknown";
-          const tx = Number.isFinite(s.tx) ? s.tx : (Number.isFinite(s.x) ? s.x : undefined);
-          const ty = Number.isFinite(s.ty) ? s.ty : (Number.isFinite(s.y) ? s.y : undefined);
-          const out = {
-            type: String(mobType),
-            ...(Number.isFinite(tx) ? { tx } : {}),
-            ...(Number.isFinite(ty) ? { ty } : {}),
-            ...(s.id ? { id: s.id } : {}),
-            ...(s.mapId ? { mapId: s.mapId } : {}),
-          };
-          if (s.speedMul != null) out.speedMul = s.speedMul;
-          if (s.aggroSpeedMul != null) out.aggroSpeedMul = s.aggroSpeedMul;
-          if (s.passiveUntilHit != null) out.passiveUntilHit = s.passiveUntilHit;
-          return out;
-        }).filter(Boolean)
+      ? currentMap.mobSpawns
       : [];
 
-    // If you painted mobs in the editor, KEEP the base spawns too (so existing spawns don't disappear).
-    // We union by (type, tx, ty) to avoid duplicates.
-    let list = editorList || [];
-    if ((!list || list.length === 0) && baseList.length) {
-      list = baseList;
-    } else if (list && list.length && baseList.length) {
-      const combined = baseList.concat(list);
-      const seen = new Set();
-      const merged = [];
-      for (const s of combined) {
-        if (!s) continue;
-        const mobType = String((s.mobType ?? s.type ?? s.mob ?? s.kind ?? "unknown"));
-        const tx = Number.isFinite(s.tx) ? s.tx : (Number.isFinite(s.x) ? s.x : undefined);
-        const ty = Number.isFinite(s.ty) ? s.ty : (Number.isFinite(s.y) ? s.y : undefined);
-        const key = mobType + "@" + tx + "," + ty;
-        if (seen.has(key)) continue;
-        seen.add(key);
+    // If this map has been edited in the Mobs layer (add/delete/edit), export EXACTLY what the editor has (even if empty).
+    // Otherwise, export the legacy authored list unchanged.
+    const editorList = getEditorMobSpawnsFor(mapKey) || [];
+    const touched = editorMobSpawnsTouched.has(mapKey);
 
-        const out = {
-          ...(s.id ? { id: s.id } : {}),
-          ...(s.mapId ? { mapId: s.mapId } : {}),
-          type: mobType,
-          ...(Number.isFinite(tx) ? { tx } : {}),
-          ...(Number.isFinite(ty) ? { ty } : {}),
-        };
-        if (s.speedMul != null) out.speedMul = s.speedMul;
-        if (s.aggroSpeedMul != null) out.aggroSpeedMul = s.aggroSpeedMul;
-        if (s.passiveUntilHit != null) out.passiveUntilHit = s.passiveUntilHit;
-        merged.push(out);
-      }
-      list = merged;
-    }
+    if (touched) return editorList;
 
-    // Normalize list entries: if an entry uses tx/ty, also provide x/y for sorting consistency.
-    // (Sorting prefers y/x but older entries might only have tx/ty.)
-    list = (list || []).map(s => {
-      if (!s) return s;
-      const tx = Number.isFinite(s.tx) ? s.tx : undefined;
-      const ty = Number.isFinite(s.ty) ? s.ty : undefined;
-      return {
-        ...s,
-        ...(s.x == null && tx != null ? { x: tx } : {}),
-        ...(s.y == null && ty != null ? { y: ty } : {}),
-      };
-    });
-
-    return list.slice().sort((a,b) => (a.y-b.y) || (a.x-b.x) || String(a.type).localeCompare(String(b.type)));
-  })();
+    // If legacy has nothing and somehow we have editor entries without being marked touched, fall back to editor entries.
+    return (baseList && baseList.length) ? baseList : editorList;
+})();;
 
   const mobSpawns = mobs.map((s, i) => {
     const mobType = (s && (s.mobType ?? s.type)) ?? "unknown";
@@ -1828,6 +2076,11 @@ async function exportCurrentMapToClipboard() {
     if (s && s.speedMul != null) out.speedMul = s.speedMul;
     if (s && s.aggroSpeedMul != null) out.aggroSpeedMul = s.aggroSpeedMul;
     if (s && s.passiveUntilHit != null) out.passiveUntilHit = s.passiveUntilHit;
+          if (s.count != null) out.count = s.count;
+          if (s.respawnSec != null) out.respawnSec = s.respawnSec;
+          if (s.leash != null) out.leash = s.leash;
+          if (s.maxHp != null) out.maxHp = s.maxHp;
+          if (s.aggroRadius != null) out.aggroRadius = s.aggroRadius;
     return out;
   });
 
@@ -4623,23 +4876,50 @@ canvas.addEventListener("mousedown", (e) => {
   }
 
   if (editorLayer === "mobs") {
-    const id = (typeof currentMapId !== "undefined") ? currentMapId
-             : (typeof currentMap !== "undefined" && currentMap?.id != null) ? currentMap.id
-             : 1;
+    const id = editorGetCurrentMapId();
     const list = getEditorMobSpawnsFor(id);
     const idx = findMobSpawnIndexAt(list, tx, ty);
 
     editorMobSpawnsTouched.add(String(id));
 
     if (isRight) {
-      if (idx !== -1) list.splice(idx, 1);
-    } else {
-      const mobType = String(editorSelectedTile() || "");
-      if (!mobType) return;
-      const base = { type: mobType, x: tx, y: ty, count: 1, respawnSec: 30, leash: 8 };
-      if (idx !== -1) list[idx] = { ...list[idx], ...base };
-      else list.push(base);
+      if (idx !== -1) {
+        const removing = list[idx];
+        list.splice(idx, 1);
+        // If we deleted the selected spawn, clear selection.
+        if (editorSelectedMobSpawn && (editorSelectedMobSpawn.mapId == id) && (editorSelectedMobSpawn.x|0) === (removing.x|0) && (editorSelectedMobSpawn.y|0) === (removing.y|0)) {
+          editorSelectedMobSpawn = null;
+        }
+      }
+      editorUpdateMobPropsPanel();
+      return;
     }
+
+    // LEFT click:
+    // - Normal click on an existing spawn: select it for editing (no overwrite)
+    // - Shift+click: force overwrite/replace using the currently selected mob type
+    if (idx !== -1 && !e.shiftKey) {
+      editorSelectedMobSpawn = { mapId: id, x: tx, y: ty };
+      editorUpdateMobPropsPanel();
+      return;
+    }
+
+    const mobType = String(editorSelectedTile() || "");
+    if (!mobType) return;
+
+    const base = editorDefaultSpawnForType(mobType, tx, ty);
+
+    if (idx !== -1) {
+      // Keep any existing tuning unless we're changing type; we still overwrite type & position.
+      const prev = list[idx] || {};
+      list[idx] = { ...prev, ...base };
+    } else {
+      list.push(base);
+    }
+
+    // Select the spawn we just placed/updated.
+    editorSelectedMobSpawn = { mapId: id, x: tx, y: ty };
+    editorUpdateMobPropsPanel();
     return;
   }
 });
@@ -7075,22 +7355,58 @@ function drawEditorOverlay() {
       ctx.strokeStyle = "rgba(255,255,255,0.22)";
       ctx.strokeRect(px + 0.5, py + 0.5, TILE_SIZE - 1, TILE_SIZE - 1);
 
-      const nm = mobCatalog?.[sp.type]?.name || sp.type || "mob";
+      const mobType = String(sp.type || "");
       const ct = (sp.count | 0) || 1;
 
-      ctx.save();
-      ctx.font = "12px system-ui, sans-serif";
-      ctx.textAlign = "center";
-      ctx.textBaseline = "middle";
-      ctx.lineWidth = 4;
-      ctx.strokeStyle = "rgba(0,0,0,0.65)";
-      ctx.fillStyle = "rgba(255,255,255,0.95)";
-      const t = (nm.length > 8 ? nm.slice(0, 8) + "…" : nm) + (ct > 1 ? ` x${ct}` : "");
-      ctx.strokeText(t, px + TILE_SIZE / 2, py + TILE_SIZE / 2);
-      ctx.fillText(t, px + TILE_SIZE / 2, py + TILE_SIZE / 2);
-      ctx.restore();
+      // Draw mob icon (same spritesheets used by the mob picker).
+      const imgM = (typeof mobSprites !== "undefined" && mobSprites) ? (mobSprites[mobType] || null) : null;
+      if (imgM && imgM.complete && imgM.naturalWidth > 0) {
+        const fs = getMobFrameSize(imgM);
+        const fw = (fs && fs.w) ? fs.w : TILE_SIZE;
+        const fh = (fs && fs.h) ? fs.h : TILE_SIZE;
+
+        // Backing so it reads on bright tiles
+        ctx.save();
+        ctx.fillStyle = "rgba(0,0,0,0.35)";
+        ctx.fillRect(px + 6, py + 6, TILE_SIZE - 12, TILE_SIZE - 12);
+        ctx.restore();
+
+        ctx.imageSmoothingEnabled = false;
+        ctx.drawImage(imgM, 0, 0, fw, fh, px + 4, py + 4, TILE_SIZE - 8, TILE_SIZE - 8);
+      } else {
+        // Fallback: short text label if sprite not loaded
+        const nm = mobCatalog?.[mobType]?.name || mobType || "mob";
+        ctx.save();
+        ctx.font = "12px system-ui, sans-serif";
+        ctx.textAlign = "center";
+        ctx.textBaseline = "middle";
+        ctx.lineWidth = 4;
+        ctx.strokeStyle = "rgba(0,0,0,0.65)";
+        ctx.fillStyle = "rgba(255,255,255,0.95)";
+        const t = (nm.length > 10 ? nm.slice(0, 10) + "…" : nm);
+        ctx.strokeText(t, px + TILE_SIZE / 2, py + TILE_SIZE / 2);
+        ctx.fillText(t, px + TILE_SIZE / 2, py + TILE_SIZE / 2);
+        ctx.restore();
+      }
+
+      // Count badge (bottom-right)
+      if (ct > 1) {
+        ctx.save();
+        ctx.fillStyle = "rgba(0,0,0,0.70)";
+        ctx.fillRect(px + TILE_SIZE - 16, py + TILE_SIZE - 14, 14, 12);
+        ctx.strokeStyle = "rgba(255,255,255,0.35)";
+        ctx.strokeRect(px + TILE_SIZE - 16 + 0.5, py + TILE_SIZE - 14 + 0.5, 13, 11);
+        ctx.fillStyle = "rgba(255,255,255,0.95)";
+        ctx.font = "10px system-ui, sans-serif";
+        ctx.textAlign = "center";
+        ctx.textBaseline = "middle";
+        ctx.fillText(String(ct), px + TILE_SIZE - 9, py + TILE_SIZE - 8);
+        ctx.restore();
+      }
     }
   }
+
+
 
   if (editorShowGrid) {
     // Grid should be in world-space (aligned to tiles), so we draw it using world coords.
@@ -7146,77 +7462,6 @@ function drawEditorOverlay() {
   // Keep sidebar status in sync even if the camera moves while the mouse is stationary.
   editorUpdateDomStatus();
 
-  ctx.restore();
-
-  // Screen-space panel
-  const list = editorAllowedList();
-  const sel = editorSelectedTile();
-  ctx.save();
-  ctx.fillStyle = "rgba(0,0,0,0.65)";
-  ctx.fillRect(14, canvas.height - 110, 360, 96);
-  ctx.strokeStyle = "rgba(255,255,255,0.18)";
-  ctx.strokeRect(14.5, canvas.height - 109.5, 359, 95);
-
-  ctx.fillStyle = "#fff";
-  ctx.font = "14px system-ui";
-  ctx.textBaseline = "top";
-
-  const y = canvas.height - 102;
-  ctx.fillText("EDITOR (F1)", 26, y);
-  ctx.fillText(`Layer: ${editorLayer.toUpperCase()} (TAB)`, 26, y + 20);
-  ctx.fillText(`Tile: ${sel}  Allowed: [${list.join(", ")}]  ([ / ])`, 26, y + 40);
-
-  // Tile preview (shows the currently selected brush)
-  const prevX = 26 + 360;
-  const prevY = y + 8;
-  const prevS = 48; // preview size (1x tile)
-  ctx.save();
-  ctx.globalAlpha = 0.95;
-  ctx.fillStyle = "rgba(0,0,0,0.55)";
-  ctx.fillRect(prevX - 6, prevY - 6, prevS + 12, prevS + 12);
-  ctx.strokeStyle = "rgba(255,255,255,0.35)";
-  ctx.strokeRect(prevX - 6, prevY - 6, prevS + 12, prevS + 12);
-
-  // If object layer and sel==0, draw a simple checker (empty)
-  if (editorLayer === "object" && sel === 0) {
-    const cs = 8;
-    for (let yy = 0; yy < prevS; yy += cs) {
-      for (let xx = 0; xx < prevS; xx += cs) {
-        ctx.fillStyle = ((xx / cs + yy / cs) % 2 === 0) ? "rgba(255,255,255,0.08)" : "rgba(0,0,0,0.08)";
-        ctx.fillRect(prevX + xx, prevY + yy, cs, cs);
-      }
-    }
-    ctx.fillStyle = "rgba(255,255,255,0.55)";
-    ctx.font = "12px system-ui, sans-serif";
-    ctx.fillText("EMPTY", prevX + 6, prevY + prevS - 8);
-  } else {
-    const img = (editorLayer === "object") ? objTileImage : tileImage;
-    const tileIndex = (editorLayer === "object") ? (Math.max(1, sel) - 1) : sel;
-    const col = tileIndex % TILESET_COLS;
-    const row = Math.floor(tileIndex / TILESET_COLS);
-    const sx = col * (TILE_SIZE + TILE_PAD);
-    const sy = row * (TILE_SIZE + TILE_PAD);
-    if (img && img.complete && img.naturalWidth > 0) {
-      ctx.imageSmoothingEnabled = false;
-      ctx.drawImage(img, sx, sy, TILE_SIZE, TILE_SIZE, prevX, prevY, prevS, prevS);
-    } else {
-      // fallback if image not loaded yet
-      ctx.fillStyle = "rgba(255,255,255,0.15)";
-      ctx.fillRect(prevX, prevY, prevS, prevS);
-    }
-  }
-  ctx.restore();
-  let under = "";
-  if (editorMouseHas) {
-    const tx = Math.floor((camX + editorMouseX) / TILE_SIZE);
-    const ty = Math.floor((camY + editorMouseY) / TILE_SIZE);
-    if (tx >= 0 && ty >= 0 && ty < map.length && tx < map[0].length) {
-      const g = map[ty][tx];
-      const o = (objMap && objMap[ty] ? objMap[ty][tx] : 0);
-      under = ` | Under cursor: G=${g} O=${o} @(${tx},${ty})`;
-    }
-  }
-  ctx.fillText(`Left=paint  Right=erase  G=grid  C=coll  Ctrl+E=export${under}`, 26, y + 60);
   ctx.restore();
 }
 

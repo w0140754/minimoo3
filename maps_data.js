@@ -141,10 +141,6 @@ export function makeMapB() {
 }
 
 // Paste into maps_data.js
-// Paste into maps_data.js
-// Paste into maps_data.js
-// Paste into maps_data.js
-// Paste into maps_data.js
 export function makeMapC() {
   const w = 18;
   const h = 12;
@@ -165,7 +161,7 @@ export function makeMapC() {
   {
     "id": "npc_girl",
     "name": "Girl",
-    "tx": 11,
+    "tx": 10,
     "ty": 5,
     "sprite": "npcs/npc_girl.png"
   },
@@ -182,22 +178,14 @@ export function makeMapC() {
     "mobType": "green",
     "tx": 10,
     "ty": 5,
-    "speedMul": 0.5
-  },
-
-  {
-    "mobType": "green",
-    "tx": 3,
-    "ty": 7,
-    "speedMul": 0.5
-  },
-  {
-    "mobType": "green",
-    "tx": 4,
-    "ty": 7,
-    "speedMul": 0.5
+    "speedMul": 0.5,
+    "aggroSpeedMul": 0.7,
+    "passiveUntilHit": true,
+    "count": 1,
+    "respawnSec": 30,
+    "leash": 8,
+    "aggroRadius": 5
   }
-
 ];
 
   return { id: "C", w, h, map, obj, z, zGate, portals, npcs, mobSpawns };
