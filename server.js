@@ -444,6 +444,68 @@ const PLAYER_FOOT_RADIUS = 14;
 // Player position is sprite center; bottom of sprite is +32. Put feet a bit above bottom.
 const PLAYER_FOOT_OFFSET_Y = 22;
 
+// ==========================================================
+// Fixed spawn helpers (tile-based spawns using "feet" anchor)
+// - Places the player's FEET at the center of a tile (tx,ty)
+// - If the exact tile is blocked, searches nearby tiles.
+// ==========================================================
+const DEFAULT_SPAWN = { mapId: "C", tx: 16, ty: 5 };
+
+function placeFeetAtTileCenter(tx, ty) {
+  return {
+    x: (tx + 0.5) * TILE,
+    y: (ty + 0.5) * TILE - PLAYER_FOOT_OFFSET_Y,
+  };
+}
+
+function trySpawnAtTile(mapId, tx, ty, radius = PLAYER_FOOT_RADIUS) {
+  const m = maps[mapId];
+  if (!m) return null;
+  if (!Number.isInteger(tx) || !Number.isInteger(ty)) return null;
+  if (tx < 0 || ty < 0 || tx >= m.w || ty >= m.h) return null;
+
+  const pos = placeFeetAtTileCenter(tx, ty);
+  // Ensure within bounds (by feet)
+  const minX = radius;
+  const maxX = m.w * TILE - radius;
+  const minFootY = radius;
+  const maxFootY = m.h * TILE - radius;
+  const fx = Math.max(minX, Math.min(maxX, pos.x));
+  const fy = Math.max(minFootY, Math.min(maxFootY, pos.y + PLAYER_FOOT_OFFSET_Y));
+  const x = fx;
+  const y = fy - PLAYER_FOOT_OFFSET_Y;
+
+  if (!collidesPlayer(mapId, x, y)) return { x, y, tx, ty };
+  return null;
+}
+
+function spawnNearTile(mapId, tx, ty, radius = PLAYER_FOOT_RADIUS, maxR = 6) {
+  // Try exact tile first
+  let s = trySpawnAtTile(mapId, tx, ty, radius);
+  if (s) return s;
+
+  // Spiral out: rings 1..maxR
+  for (let r = 1; r <= maxR; r++) {
+    for (let dy = -r; dy <= r; dy++) {
+      for (let dx = -r; dx <= r; dx++) {
+        if (Math.abs(dx) !== r && Math.abs(dy) !== r) continue; // only perimeter
+        s = trySpawnAtTile(mapId, tx + dx, ty + dy, radius);
+        if (s) return s;
+      }
+    }
+  }
+  // Fallback: random safe spawn on that map
+  return findSpawn(mapId, radius);
+}
+
+function applyFixedSpawn(p) {
+  const mapId = DEFAULT_SPAWN.mapId;
+  const s = spawnNearTile(mapId, DEFAULT_SPAWN.tx, DEFAULT_SPAWN.ty, PLAYER_FOOT_RADIUS);
+  p.mapId = mapId;
+  p.x = s.x;
+  p.y = s.y;
+}
+
 function collides(mapId, nx, ny, radius) {
   const left = nx - radius;
   const right = nx + radius;
@@ -2118,6 +2180,11 @@ ws.on("message", async (buf) => {
 		applyRowToPlayer(p, row);
 	  } else {
 		console.log(`🆕 New player: ${p.name}`);
+		// Brand new character: always start on Map C at tile (16,5)
+		applyFixedSpawn(p);
+		p.save = null; // don't override fixed respawn with an old save
+		// Ensure full HP on first join
+		p.hp = p.maxHp;
 	  }
 
 	  send(ws, { type: "nameAccepted", name: p.name });
@@ -3445,16 +3512,8 @@ function tickStep(dt) {
           p.skill6CloudX = 0;
           p.skill6CloudY = 0;
 
-          if (p.save) {
-            p.mapId = p.save.mapId;
-            p.x = p.save.x;
-            p.y = p.save.y;
-          } else {
-            const s = findSpawn("C", PLAYER_FOOT_RADIUS);
-            p.mapId = "C";
-            p.x = s.x;
-            p.y = s.y;
-          }
+          applyFixedSpawn(p);
+          p.save = null;
           p.hp = p.maxHp;
           p.invuln = 0.6;
           p.atkCd = 0;
