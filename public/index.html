@@ -493,6 +493,28 @@ const TILESET_COLS = 5; // tiles per row in tiles.png and tiles_objects.png
 const AUTO_DIRTPATH_TILE = 500; // keep <= server EDITOR_MAX_GROUND_TILE (default 999)
 const AUTO_DIRTPATH_COLS = 4;   // 4x4 = 16 variants
 
+// ======================
+// AUTO WATER (4-frame animated tile)
+// Painted as a special ground tile id (does not live in tiles.png).
+// Rendered from its own 1x4 atlas: /assets/autotile_water.png
+// ======================
+const AUTO_WATER_TILE = 505; // keep <= server EDITOR_MAX_GROUND_TILE (default 999)
+const AUTO_WATER_FRAMES = 4;
+const AUTO_WATER_FPS = 5;
+
+function isAutoWater(tile) { return tile === AUTO_WATER_TILE; }
+
+// Deterministic per-tile phase so water doesn't animate in perfect sync across large lakes.
+// Returns a stable value in [0, 1) for a given tile coord (tx, ty).
+function autoWaterPhase01(tx, ty) {
+  tx = tx | 0; ty = ty | 0;
+  let n = (tx * 374761393) ^ (ty * 668265263);
+  n = Math.imul(n ^ (n >>> 13), 1274126177);
+  n = (n ^ (n >>> 16)) >>> 0;
+  return n / 4294967296;
+}
+
+
 function isAutoDirtPath(tile) { return tile === AUTO_DIRTPATH_TILE; }
 
 function autoDirtPathMaskAt(tx, ty) {
@@ -1331,6 +1353,7 @@ function rebuildEditorGroundTiles() {
   // Add special editor-only ground tiles (not in tiles.png)
   if (!EDIT_GROUND_TILES.includes(AUTO_DIRTPATH_TILE)) EDIT_GROUND_TILES.push(AUTO_DIRTPATH_TILE);
 
+  if (!EDIT_GROUND_TILES.includes(AUTO_WATER_TILE)) EDIT_GROUND_TILES.push(AUTO_WATER_TILE);
 }
           // grass, wall (keep portals/statues unchanged for now)
 let EDIT_OBJECT_TILES = [0, 1, 2, 6];    // will expand automatically based on tiles_objects.png
@@ -1714,6 +1737,27 @@ function editorTileThumbCanvas(tile, layer){
     g.fillText("AUTO", 10, 28);
     return c;
   }
+
+  // Special case: animated water brush thumbnail (show frame 0)
+  if (layer === "ground" && tile === AUTO_WATER_TILE) {
+    const imgW = autotileWaterImg;
+    if (imgW && imgW.complete && imgW.naturalWidth > 0) {
+      const cellW = TILE_SIZE + TILE_PAD; // water atlas uses same padding convention
+      const sxW = 0;
+      const syW = 0;
+      g.drawImage(imgW, sxW, syW, TILE_SIZE, TILE_SIZE, 0, 0, 48, 48);
+      return c;
+    }
+    // fallback if not loaded yet
+    g.fillStyle = "rgba(255,255,255,0.10)";
+    g.fillRect(0,0,48,48);
+    g.fillStyle = "rgba(255,255,255,0.55)";
+    g.font = "11px system-ui";
+    g.fillText("WATER", 6, 28);
+    return c;
+  }
+
+
 // Object layer IDs are 1-based in the map data (0 = empty), but atlas coords are 0-based.
   const tileIndex = (layer === "object") ? (tile - 1) : tile;
 
@@ -2296,6 +2340,14 @@ autotileDirtImg.onload = () => {
   if (typeof editorBuildTileGrid === "function") editorBuildTileGrid();
 };
 autotileDirtImg.src = "/assets/autotile_dirtpath.png";
+
+// 4-frame animated water atlas (1x4)
+const autotileWaterImg = new Image();
+autotileWaterImg.onload = () => {
+  // Ensure the tile palette thumbnails refresh when this loads.
+  if (typeof editorBuildTileGrid === "function") editorBuildTileGrid();
+};
+autotileWaterImg.src = "/assets/autotile_water.png";
 // Skill 1 black hole spritesheet (8 frames vertical: 64x64 each)
 const SKILL1_BLACKHOLE = {
   src: "/assets/skills/skill_blackhole.png",
@@ -5579,8 +5631,21 @@ function drawMap() {
       const py = Math.round(y * TILE_SIZE);
 
       
+// Special case: animated water (4-frame atlas)
+if (tile === AUTO_WATER_TILE && autotileWaterImg && autotileWaterImg.complete && autotileWaterImg.naturalWidth > 0) {
+  const cellW = TILE_SIZE + TILE_PAD;
+  const t = performance.now() * 0.001;
+
+  // Add a stable per-tile phase so big lakes don't look perfectly synchronized.
+  const phase = autoWaterPhase01(x, y) * AUTO_WATER_FRAMES; // 0..frames
+  const frame = Math.floor(t * AUTO_WATER_FPS + phase) % AUTO_WATER_FRAMES;
+
+  const sxW = frame * cellW;
+  const syW = 0;
+  ctx.drawImage(autotileWaterImg, sxW, syW, TILE_SIZE, TILE_SIZE, px, py, TILE_SIZE, TILE_SIZE);
+}
 // Special case: 16-variant autotile (drawn from its own atlas)
-if (tile === AUTO_DIRTPATH_TILE && autotileDirtImg && autotileDirtImg.complete && autotileDirtImg.naturalWidth > 0) {
+else if (tile === AUTO_DIRTPATH_TILE && autotileDirtImg && autotileDirtImg.complete && autotileDirtImg.naturalWidth > 0) {
   const cell = TILE_SIZE + TILE_PAD;
   const mask = autoDirtPathMaskAt(x, y); // 0..15
   const col = mask % AUTO_DIRTPATH_COLS;
