@@ -325,12 +325,10 @@ function cloneMap(m) {
 }
 
 // Live, editable maps used for collision, portals, snapshots, etc.
-let maps = {
-  A: cloneMap(mapTemplates.A),
-  B: cloneMap(mapTemplates.B),
-  C: cloneMap(mapTemplates.C),
-  D: cloneMap(mapTemplates.D),
-};
+// Build from mapTemplates so adding Map E/F/etc. only requires updating maps_data.js.
+let maps = Object.fromEntries(
+  Object.entries(mapTemplates).map(([id, tmpl]) => [id, cloneMap(tmpl)])
+);
 
 function tileAt(mapId, x, y) {
   const m = maps[mapId];
@@ -693,18 +691,28 @@ function findSpawn(mapId, radius) {
   return { x: TILE * 2, y: TILE * 2 };
 }
 
-function findPortalSpawn(mapId, fromMapId) {
+function findPortalSpawn(mapId, fromMapId, sourcePortal = null) {
   const m = maps[mapId];
   if (!m) return findSpawn(mapId, PLAYER_FOOT_RADIUS);
 
   const portals = m.portals || [];
-  const back = portals.find(p => p.to === fromMapId) || portals[0];
+
+  // If multiple portals link the same two maps, prefer the one that matches the
+  // source portal's pair/id so travel can be intentionally paired (e.g. secret links).
+  let back = null;
+  const sourcePair = sourcePortal && (sourcePortal.pair ?? sourcePortal.id ?? null);
+  if (sourcePair != null) {
+    back = portals.find(p => p && p.to === fromMapId && ((p.pair ?? p.id ?? null) === sourcePair)) || null;
+  }
+
+  // Backward-compatible fallback: first portal in the destination that returns to fromMapId.
+  back = back || portals.find(p => p && p.to === fromMapId) || portals[0];
   if (!back) return findSpawn(mapId, PLAYER_FOOT_RADIUS);
 
-  // Old behavior spawned adjacent to avoid instant back-and-forth.
-  // New behavior: spawn directly ON the destination portal tile for a more natural feel.
-  // We prevent loops with a small server-side portal cooldown (see msg.type === "portal").
-  return centerOfTile(back.x, back.y);
+  // Spawn on the destination portal tile with the player's FEET centered on the tile.
+  // Player coordinates are sprite-center based, so we must account for PLAYER_FOOT_OFFSET_Y.
+  // Also search nearby if the exact tile is blocked.
+  return spawnNearTile(mapId, back.x, back.y, PLAYER_FOOT_RADIUS);
 }
 
 function centerOfTile(tx, ty) {
@@ -3123,7 +3131,7 @@ if (msg.type === "editTile") {
       if (!to || !maps[to]) return;
 
       const fromMapId = p.mapId;
-      const sp = findPortalSpawn(to, fromMapId);
+      const sp = findPortalSpawn(to, fromMapId, portal);
 
       // If the player leaves the map, any active Skill 1 effects they own should end immediately.
       cancelSkill1ForCaster(p.id);
