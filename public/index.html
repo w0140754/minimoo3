@@ -166,35 +166,6 @@
 }
 .mobprops-actions button:hover{background: rgba(255,255,255,0.12);}
 
-
-
-/* --- Mobile game-mode interaction safeguards (prevent text selection/callouts) --- */
-html, body {
-  -webkit-user-select: none;
-  user-select: none;
-  -webkit-touch-callout: none;
-  -webkit-tap-highlight-color: transparent;
-}
-
-/* Allow text entry where needed (editor search, mob props inputs, etc.) */
-input, textarea, [contenteditable="true"] {
-  -webkit-user-select: text;
-  user-select: text;
-  -webkit-touch-callout: default;
-}
-
-/* Game surfaces / HUD buttons should not select text or trigger callouts */
-.game-wrap, #c, .hud-btn, .main-menu, .main-menu-item {
-  -webkit-user-select: none;
-  user-select: none;
-  -webkit-touch-callout: none;
-  -webkit-tap-highlight-color: transparent;
-}
-
-/* Prevent browser gesture handling on the game canvas */
-#c {
-  touch-action: none;
-}
 @media (max-width: 900px){
   .app-layout{flex-direction:column;}
   .editor-panel{width: min(720px, 96vw);}
@@ -292,40 +263,6 @@ input, textarea, [contenteditable="true"] {
 </div>
 <script src="/mobile_controls.js"></script><script>
 "use strict";
-
-// ===== Mobile browser UX: prevent text-selection/callout on game surface =====
-(function setupGameSurfaceTouchGuards(){
-  const prevent = (e) => {
-    // Allow normal behavior for editable fields (editor inputs/search)
-    const t = e.target;
-    if (t && (t.closest?.('input, textarea, [contenteditable="true"]'))) return;
-    e.preventDefault();
-  };
-
-  function bindGuards() {
-    const canvasEl = document.getElementById('c');
-    const gameWrapEl = document.getElementById('gameWrap') || document.querySelector('.game-wrap');
-    const menuEl = document.getElementById('mainMenu');
-    const btnEl = document.getElementById('invBtn');
-    [canvasEl, gameWrapEl, menuEl, btnEl].forEach((el) => {
-      if (!el || el.__touchGuardsBound) return;
-      el.__touchGuardsBound = true;
-      el.addEventListener('touchstart', prevent, { passive:false });
-      el.addEventListener('touchmove', prevent, { passive:false });
-      el.addEventListener('touchend', prevent, { passive:false });
-      el.addEventListener('contextmenu', (e) => e.preventDefault());
-      el.addEventListener('dragstart', (e) => e.preventDefault());
-      el.addEventListener('selectstart', (e) => e.preventDefault());
-    });
-  }
-
-  if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', bindGuards, { once:true });
-  } else {
-    bindGuards();
-  }
-})();
-
 
 // ===== Mobile: suppress synthetic "tap -> mousedown" basic attacks =====
 // Many mobile browsers generate mouse events after a touch. We track the most recent touch
