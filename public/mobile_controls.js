@@ -8,7 +8,7 @@
   // - Limits horizontal fill to 92% of usable width to avoid edge overlap (adjustable).
   // - Tries harder to keep the hamburger/menu button above the canvas via CSS + JS.
 
-  const MC_VERSION = "v17-actions";
+  const MC_VERSION = "v18-ring";
 
   function isProbablyMobile() {
     const hasTouch =
@@ -157,6 +157,46 @@
   background: rgba(255,255,255,0.14);
   border-color: rgba(255,255,255,0.26);
   color: rgba(255,255,255,0.92);
+}
+.mc-attack-ring{
+  width: 154px;
+  height: 154px;
+  border-radius: 999px;
+  box-sizing: border-box;
+  border: 14px solid rgba(120,170,255,0.28);
+  background: rgba(120,170,255,0.06);
+  position: relative;
+  -webkit-tap-highlight-color: transparent;
+}
+.mc-attack-ring::before{
+  content: "";
+  position: absolute;
+  inset: 14px;
+  border-radius: 999px;
+  border: 1px solid rgba(120,170,255,0.12);
+}
+.mc-attack-ring.mc-active{
+  border-color: rgba(140,190,255,0.62);
+  background: rgba(120,170,255,0.12);
+  box-shadow: 0 0 0 2px rgba(120,170,255,0.10) inset;
+}
+.mc-attack-ring .mc-attack-dot{
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 18px;
+  height: 18px;
+  margin-left: -9px;
+  margin-top: -9px;
+  border-radius: 999px;
+  background: rgba(180,215,255,0.75);
+  box-shadow: 0 0 10px rgba(140,190,255,0.35);
+  pointer-events: none;
+  opacity: 0;
+  transform: translate(0px, 0px);
+}
+.mc-attack-ring.mc-active .mc-attack-dot{
+  opacity: 1;
 }
 
     .mc-rotate-overlay {
@@ -504,16 +544,16 @@
   });
 
 
-// ===== Interact + Directional Attack buttons =====
-// Layout: a central Interact button with 4 directional attack pads around it.
-// By default:
-// - Interact is faintly visible (discoverable)
-// - Attack pads are "ghost" (nearly invisible) but still tappable; they brighten while pressed.
+// ===== Interact + Analog Attack Ring =====
+// Layout: center Interact button with a surrounding attack ring.
+// Tap/hold the ring to attack in any direction (great for wand aiming).
 
-const ACTION_SIZE = 72;
-const ACTION_GAP = 10;
-const ACTION_RANGE_PX = 220; // how far ahead to aim for directional attacks
+const ACTION_CENTER_SIZE = 72;
+const ATTACK_RING_OUTER = 154;
+const ATTACK_RING_THICKNESS = 14;
+const ACTION_RANGE_PX = 220; // how far ahead to aim
 const ACTION_HOLD_REPEAT = true; // hold-to-attack (uses attackHold if available)
+const RING_DEADZONE_PX = 16; // ignore taps too close to center
 
 const actionWrap = document.createElement("div");
 actionWrap.className = "mc-action-wrap";
@@ -525,8 +565,6 @@ function isMainMenuOpenDom() {
 }
 
 function syncActionInteractivity() {
-  // When the hamburger dropdown is open, make the action cluster non-interactive
-  // so it never blocks tapping menu items.
   const open = isMainMenuOpenDom();
   actionWrap.style.pointerEvents = open ? "none" : "auto";
 }
@@ -540,7 +578,6 @@ function makeBtn(label, extraClass = "") {
   return b;
 }
 
-// Keep the action cluster from blocking hamburger-menu clicks.
 try {
   const mm = document.getElementById("mainMenu");
   if (mm) {
@@ -548,52 +585,38 @@ try {
     mo.observe(mm, { attributes: true, attributeFilter: ["class", "style"] });
   }
 } catch (_) {}
-
-// Fallback (in case the menu is created later)
-setInterval(() => {
-  try { syncActionInteractivity(); } catch (_) {}
-}, 250);
+setInterval(() => { try { syncActionInteractivity(); } catch (_) {} }, 250);
 
 const btnInteract = makeBtn("");
 btnInteract.setAttribute("aria-label", "Interact");
-const btnUp = makeBtn("", "mc-ghost");
-const btnDown = makeBtn("", "mc-ghost");
-const btnLeft = makeBtn("", "mc-ghost");
-const btnRight = makeBtn("", "mc-ghost");
-
-// Position with CSS grid (we'll place the wrapper itself in JS per safe area)
-actionWrap.style.display = "none";
-actionWrap.style.width = (ACTION_SIZE * 3 + ACTION_GAP * 2) + "px";
-actionWrap.style.height = (ACTION_SIZE * 3 + ACTION_GAP * 2) + "px";
-actionWrap.style.display = "grid";
-actionWrap.style.gridTemplateColumns = `repeat(3, ${ACTION_SIZE}px)`;
-actionWrap.style.gridTemplateRows = `repeat(3, ${ACTION_SIZE}px)`;
-actionWrap.style.gap = ACTION_GAP + "px";
-actionWrap.style.alignItems = "center";
-actionWrap.style.justifyItems = "center";
-
-// grid placement
-btnUp.style.gridColumn = "2";
-btnUp.style.gridRow = "1";
-btnLeft.style.gridColumn = "1";
-btnLeft.style.gridRow = "2";
-btnInteract.style.gridColumn = "2";
-btnInteract.style.gridRow = "2";
-btnRight.style.gridColumn = "3";
-btnRight.style.gridRow = "2";
-btnDown.style.gridColumn = "2";
-btnDown.style.gridRow = "3";
-
-// Make Interact more visible than ghost pads
 btnInteract.style.background = "rgba(255,255,255,0.07)";
 btnInteract.style.borderColor = "rgba(255,255,255,0.16)";
 btnInteract.style.color = "rgba(255,255,255,0.75)";
 
-actionWrap.appendChild(btnUp);
-actionWrap.appendChild(btnLeft);
+const attackRing = document.createElement("div");
+attackRing.className = "mc-attack-ring";
+attackRing.setAttribute("role", "button");
+attackRing.setAttribute("aria-label", "Attack ring");
+const attackDot = document.createElement("div");
+attackDot.className = "mc-attack-dot";
+attackRing.appendChild(attackDot);
+
+actionWrap.style.display = "none";
+actionWrap.style.width = ATTACK_RING_OUTER + "px";
+actionWrap.style.height = ATTACK_RING_OUTER + "px";
+actionWrap.style.display = "block";
+
+attackRing.style.position = "absolute";
+attackRing.style.left = "0";
+attackRing.style.top = "0";
+btnInteract.style.position = "absolute";
+btnInteract.style.left = Math.round((ATTACK_RING_OUTER - ACTION_CENTER_SIZE)/2) + "px";
+btnInteract.style.top = Math.round((ATTACK_RING_OUTER - ACTION_CENTER_SIZE)/2) + "px";
+btnInteract.style.width = ACTION_CENTER_SIZE + "px";
+btnInteract.style.height = ACTION_CENTER_SIZE + "px";
+
+actionWrap.appendChild(attackRing);
 actionWrap.appendChild(btnInteract);
-actionWrap.appendChild(btnRight);
-actionWrap.appendChild(btnDown);
 
 function getMyWorldPos() {
   if (typeof window.getMyPos === "function") return window.getMyPos();
@@ -633,7 +656,6 @@ function startAttackDir(dx, dy) {
   if (isMainMenuOpenDom()) return;
   const aim = aimWorldFromDir(dx, dy);
   if (!aim) return;
-
   try {
     if (window.mainMenuOpen || window.inventoryOpen || window.skillsOpen || window.monsterBookOpen) return;
   } catch (_) {}
@@ -647,6 +669,16 @@ function startAttackDir(dx, dy) {
   } else if (typeof window.sendAttack === "function") {
     window.sendAttack();
   }
+}
+
+function updateAttackDir(dx, dy) {
+  if (!holdActive) return;
+  holdDir = { dx, dy };
+  const aim = aimWorldFromDir(dx, dy);
+  if (!aim) return;
+  try {
+    if (typeof window.sendAttackHoldAim === "function") window.sendAttackHoldAim(aim.wx, aim.wy);
+  } catch (_) {}
 }
 
 function stopAttackHold() {
@@ -695,20 +727,100 @@ function bindPress(el, onDown, onUp) {
 
 bindPress(btnInteract, () => doInteract());
 
-bindPress(btnUp, () => startAttackDir(0, -1), () => stopAttackHold());
-bindPress(btnDown, () => startAttackDir(0, 1), () => stopAttackHold());
-bindPress(btnLeft, () => startAttackDir(-1, 0), () => stopAttackHold());
-bindPress(btnRight, () => startAttackDir(1, 0), () => stopAttackHold());
+let ringPointerId = null;
+let ringAttackStarted = false;
 
-window.addEventListener("blur", () => stopAttackHold());
-document.addEventListener("visibilitychange", () => { if (document.hidden) stopAttackHold(); });
+function setAttackRingVisual(dx, dy, active) {
+  if (!attackRing) return;
+  attackRing.classList.toggle("mc-active", !!active);
+  if (!attackDot) return;
+  if (!active) {
+    attackDot.style.transform = "translate(0px, 0px)";
+    return;
+  }
+  const len = Math.hypot(dx, dy) || 1;
+  const ux = dx / len, uy = dy / len;
+  const r = (ATTACK_RING_OUTER / 2) - (ATTACK_RING_THICKNESS * 0.9);
+  const px = ux * r;
+  const py = uy * r;
+  attackDot.style.transform = `translate(${px.toFixed(1)}px, ${py.toFixed(1)}px)`;
+}
+
+function ringVectorFromPointer(e) {
+  const rect = attackRing.getBoundingClientRect();
+  const cx = rect.left + rect.width / 2;
+  const cy = rect.top + rect.height / 2;
+  const dx = e.clientX - cx;
+  const dy = e.clientY - cy;
+  const dist = Math.hypot(dx, dy);
+  return { dx, dy, dist };
+}
+
+function onAttackRingPointerDown(e) {
+  if (!isLandscapeNow() || isMainMenuOpenDom()) return;
+  e.preventDefault();
+  e.stopPropagation();
+  ringPointerId = e.pointerId;
+  ringAttackStarted = false;
+  try { attackRing.setPointerCapture(e.pointerId); } catch (_) {}
+
+  const v = ringVectorFromPointer(e);
+  if (v.dist <= RING_DEADZONE_PX) {
+    setAttackRingVisual(0, 0, false);
+    return;
+  }
+  ringAttackStarted = true;
+  setAttackRingVisual(v.dx, v.dy, true);
+  startAttackDir(v.dx, v.dy);
+}
+
+function onAttackRingPointerMove(e) {
+  if (ringPointerId == null || e.pointerId !== ringPointerId) return;
+  e.preventDefault();
+  e.stopPropagation();
+  const v = ringVectorFromPointer(e);
+  if (v.dist <= RING_DEADZONE_PX) {
+    if (ringAttackStarted) stopAttackHold();
+    ringAttackStarted = false;
+    setAttackRingVisual(0, 0, false);
+    return;
+  }
+  setAttackRingVisual(v.dx, v.dy, true);
+  if (!ringAttackStarted) {
+    ringAttackStarted = true;
+    startAttackDir(v.dx, v.dy);
+  } else {
+    updateAttackDir(v.dx, v.dy);
+  }
+}
+
+function onAttackRingPointerEnd(e) {
+  if (ringPointerId == null || (e && e.pointerId != null && e.pointerId !== ringPointerId)) return;
+  if (e) {
+    e.preventDefault();
+    e.stopPropagation();
+    try { attackRing.releasePointerCapture(e.pointerId); } catch (_) {}
+  }
+  ringPointerId = null;
+  ringAttackStarted = false;
+  setAttackRingVisual(0, 0, false);
+  stopAttackHold();
+}
+
+attackRing.addEventListener("pointerdown", onAttackRingPointerDown, { passive: false });
+attackRing.addEventListener("pointermove", onAttackRingPointerMove, { passive: false });
+attackRing.addEventListener("pointerup", onAttackRingPointerEnd, { passive: false });
+attackRing.addEventListener("pointercancel", onAttackRingPointerEnd, { passive: false });
+
+window.addEventListener("blur", () => { onAttackRingPointerEnd(); stopAttackHold(); });
+document.addEventListener("visibilitychange", () => { if (document.hidden) { onAttackRingPointerEnd(); stopAttackHold(); } });
 
 function positionActionCluster() {
   const vp = getVP();
   const safe = getSafeInsets();
 
-  const clusterW = ACTION_SIZE * 3 + ACTION_GAP * 2;
-  const clusterH = ACTION_SIZE * 3 + ACTION_GAP * 2;
+  const clusterW = ATTACK_RING_OUTER;
+  const clusterH = ATTACK_RING_OUTER;
 
   const minTop = safe.top + 84;
   const maxTop = vp.h - safe.bottom - clusterH - 84;
