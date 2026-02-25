@@ -3110,7 +3110,14 @@ let serverClockOffsetMs = 0; // localNow - serverNow
 let haveServerClock = false;
 function serverNowMs() { return Date.now() - serverClockOffsetMs; }
 
-let myName = null;
+let myName = (() => {
+  try {
+    const saved = localStorage.getItem("playerName");
+    return (typeof saved === "string" && saved.trim()) ? saved.trim() : null;
+  } catch {
+    return null;
+  }
+})();
 let nameSent = false;
 
 function promptForName() {
@@ -3120,7 +3127,8 @@ function promptForName() {
     const name = raw.trim();
     if (/^[A-Za-z]{4,8}$/.test(name)) {
       myName = name;
-      if (ws.readyState === 1) {
+      try { localStorage.setItem("playerName", myName); } catch {}
+      if (ws && ws.readyState === 1) {
         ws.send(JSON.stringify({ type: "setName", name }));
         nameSent = true;
       }
@@ -3131,6 +3139,13 @@ function promptForName() {
 }
 
 function handleWsOpen() {
+  if (myName && /^[A-Za-z]{4,8}$/.test(myName)) {
+    if (ws && ws.readyState === 1) {
+      ws.send(JSON.stringify({ type: "setName", name: myName }));
+      nameSent = true;
+    }
+    return;
+  }
   promptForName();
 }
 
@@ -3793,6 +3808,7 @@ function handleWsMessage(e) {
   }
   if (msg.type === "nameAccepted") {
     myName = msg.name || myName;
+    try { if (myName) localStorage.setItem("playerName", myName); } catch {}
     return;
   }
 
