@@ -3061,7 +3061,37 @@ function drawFadeOverlay() {
    NETWORK
 ====================== */
 const wsProto = (location.protocol === "https:") ? "wss" : "ws";
-const ws = new WebSocket(`${wsProto}://${location.host}`);
+let ws = null;
+let wsReconnectTimer = null;
+
+function scheduleWsReconnect(delayMs = 800) {
+  if (document.visibilityState === "hidden") return;
+  if (wsReconnectTimer) return;
+  wsReconnectTimer = setTimeout(() => {
+    wsReconnectTimer = null;
+    connectWs();
+  }, delayMs);
+}
+
+function connectWs() {
+  if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) return;
+
+  try {
+    ws = new WebSocket(`${wsProto}://${location.host}`);
+  } catch (err) {
+    scheduleWsReconnect(1000);
+    return;
+  }
+
+  ws.addEventListener("open", handleWsOpen);
+  ws.onmessage = handleWsMessage;
+  ws.addEventListener("close", () => {
+    scheduleWsReconnect(700);
+  });
+  ws.addEventListener("error", () => {
+    try { ws.close(); } catch {}
+  });
+}
 
 function wsSend(obj) {
   if (!ws || ws.readyState !== 1) return false;
@@ -3100,9 +3130,11 @@ function promptForName() {
   }
 }
 
-ws.addEventListener("open", () => {
+function handleWsOpen() {
   promptForName();
-});
+}
+
+connectWs();
 
 
 let myId = null;
@@ -3750,7 +3782,7 @@ function drawMonsterBook() {
 }
 
 
-ws.onmessage = (e) => {
+function handleWsMessage(e) {
   const msg = JSON.parse(e.data);
 
   if (msg.type === "nameRejected") {
@@ -8323,6 +8355,46 @@ function drawNameplate(x, y, level, name, spriteH = PLAYER_FRAME_H) {
 ====================== */
 let last = performance.now();
 
+function recoverFromBackgroundResume(reason = "resume") {
+  // Reset frame timer to avoid giant dt after backgrounding.
+  last = performance.now();
+
+  // Reconnect socket if mobile browser suspended/killed it.
+  if (!ws || ws.readyState === WebSocket.CLOSED || ws.readyState === WebSocket.CLOSING) {
+    connectWs();
+    return;
+  }
+
+  // If socket is open, re-send current input state so controls don't feel stuck.
+  if (ws.readyState === WebSocket.OPEN) {
+    try { sendInput(); } catch {}
+  }
+}
+
+window.addEventListener("pageshow", () => {
+  recoverFromBackgroundResume("pageshow");
+}, { passive: true });
+
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState === "visible") {
+    recoverFromBackgroundResume("visibilitychange");
+  } else {
+    last = performance.now();
+  }
+}, { passive: true });
+
+window.addEventListener("focus", () => {
+  recoverFromBackgroundResume("focus");
+}, { passive: true });
+
+window.addEventListener("blur", () => {
+  last = performance.now();
+}, { passive: true });
+
+window.addEventListener("pagehide", () => {
+  last = performance.now();
+}, { passive: true });
+
 
 function drawPortals() {
   if (!Array.isArray(portals) || portals.length === 0) return;
@@ -8402,8 +8474,10 @@ function drawPortals() {
 
 function loop(nowMs) {
         updateClientSkillCasts(nowMs);
-  const dt = (nowMs - last) / 1000;
+  let dt = (nowMs - last) / 1000;
   last = nowMs;
+  if (!Number.isFinite(dt) || dt < 0) dt = 0;
+  if (dt > 0.1) dt = 1 / 60;
 
   try {
 
