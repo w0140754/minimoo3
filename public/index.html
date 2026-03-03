@@ -172,6 +172,73 @@
   .tile-grid{grid-template-columns: repeat(8, 1fr); max-height: 240px;}
 }
 
+.title-screen-overlay{
+  position: fixed;
+  inset: 0;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+  background: rgba(10,12,18,0.82);
+  backdrop-filter: blur(6px);
+  z-index: 200;
+}
+.title-screen-overlay.open{display:flex;}
+.title-screen-card{
+  width: min(460px, 94vw);
+  padding: 26px;
+  border-radius: 22px;
+  background: linear-gradient(180deg, rgba(28,31,40,0.96), rgba(15,17,23,0.96));
+  border: 1px solid rgba(255,255,255,0.14);
+  box-shadow: 0 24px 60px rgba(0,0,0,0.42);
+}
+.title-screen-eyebrow{font-size:12px; letter-spacing:0.18em; text-transform:uppercase; opacity:0.72; margin-bottom:8px;}
+.title-screen-title{margin:0; font-size:34px; line-height:1.05;}
+.title-screen-subtitle{margin:10px 0 0; color:rgba(255,255,255,0.78); font-size:14px; line-height:1.45;}
+.title-screen-error{margin-top:14px; padding:10px 12px; border-radius:12px; background:rgba(160,40,40,0.22); border:1px solid rgba(255,120,120,0.28); color:#ffd6d6; font-size:13px;}
+.title-screen-list{margin-top:18px; display:grid; gap:10px;}
+.title-screen-char{
+  width:100%;
+  text-align:left;
+  padding:14px 16px;
+  border-radius:14px;
+  background: rgba(255,255,255,0.06);
+  border:1px solid rgba(255,255,255,0.14);
+  color:#fff;
+  cursor:pointer;
+}
+.title-screen-char:hover{background: rgba(255,255,255,0.10);}
+.title-screen-char.selected{border-color: rgba(255,255,255,0.42); background: rgba(255,255,255,0.12);}
+.title-screen-char-name{font-size:16px; font-weight:700;}
+.title-screen-char-meta{margin-top:4px; font-size:12px; color:rgba(255,255,255,0.68);}
+.title-screen-form{margin-top:18px;}
+.title-screen-label{display:block; font-size:13px; margin-bottom:8px; opacity:0.86;}
+.title-screen-input{
+  width:100%;
+  box-sizing:border-box;
+  padding:12px 14px;
+  border-radius:14px;
+  background: rgba(255,255,255,0.07);
+  border:1px solid rgba(255,255,255,0.14);
+  color:#fff;
+  font-size:16px;
+}
+.title-screen-help{margin-top:8px; font-size:12px; color:rgba(255,255,255,0.62);}
+.title-screen-actions{margin-top:18px; display:flex; flex-wrap:wrap; gap:10px;}
+.title-screen-btn{
+  appearance:none;
+  border:1px solid rgba(255,255,255,0.16);
+  background: rgba(255,255,255,0.08);
+  color:#fff;
+  border-radius:14px;
+  padding:11px 16px;
+  font-size:14px;
+  cursor:pointer;
+}
+.title-screen-btn.primary{background: rgba(255,255,255,0.16);}
+.title-screen-btn:disabled{opacity:0.45; cursor:not-allowed;}
+.hidden{display:none !important;}
+
   </style>
 <meta content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no" name="viewport"/><meta content="#000000" name="theme-color"/><meta content="yes" name="apple-mobile-web-app-capable"/><meta content="black-translucent" name="apple-mobile-web-app-status-bar-style"/><meta content="Mini MMO" name="apple-mobile-web-app-title"/><link href="/manifest.webmanifest" rel="manifest"/><link href="/icons/icon-180.png" rel="apple-touch-icon"/></head>
 <body>
@@ -183,9 +250,25 @@
 <button class="main-menu-item" data-action="skills" role="menuitem" type="button">Skills <span class="hint">K</span></button>
 <button class="main-menu-item" data-action="book" role="menuitem" type="button">Monster Book <span class="hint">B</span></button>
 <button aria-disabled="true" class="main-menu-item disabled" data-action="quests" disabled="" role="menuitem" type="button">Quests <span class="hint">Soon</span></button>
+<button class="main-menu-item" data-action="characters" role="menuitem" type="button">Characters <span class="hint">Menu</span></button>
 <button aria-disabled="true" class="main-menu-item disabled" data-action="settings" disabled="" role="menuitem" type="button">Settings <span class="hint">Soon</span></button>
 </div>
 <canvas height="600" id="c" width="800"></canvas>
+<div class="title-screen-overlay" id="titleScreenOverlay" aria-hidden="true">
+<div class="title-screen-card" id="titleScreenCard">
+<div class="title-screen-eyebrow">Mini MMO</div>
+<h1 class="title-screen-title" id="titleScreenTitle">Welcome</h1>
+<p class="title-screen-subtitle" id="titleScreenSubtitle">Choose a character to begin.</p>
+<div class="title-screen-error hidden" id="titleScreenError"></div>
+<div class="title-screen-list hidden" id="characterList"></div>
+<div class="title-screen-form hidden" id="characterCreateForm">
+<label class="title-screen-label" for="characterNameInput">Character name</label>
+<input id="characterNameInput" class="title-screen-input" type="text" maxlength="8" autocomplete="off" placeholder="Letters only, 4-8 chars" />
+<div class="title-screen-help">Names must be letters only, 4-8 characters.</div>
+</div>
+<div class="title-screen-actions" id="titleScreenActions"></div>
+</div>
+</div>
 
     </div>
     <div class="editor-panel hidden" id="editorPanel" aria-label="Map editor panel">
@@ -2877,6 +2960,10 @@ if (mainMenu) {
       setMainMenuOpen(false);
       return;
     }
+    if (action === "characters") {
+      returnToCharacterSelect();
+      return;
+    }
   });
 }
 // Escape closes the menu (and keeps existing ESC behavior elsewhere)
@@ -3099,6 +3186,7 @@ let wsReconnectTimer = null;
 
 function scheduleWsReconnect(delayMs = 800) {
   if (document.visibilityState === "hidden") return;
+  if (!pendingCharacterName && !activeCharacterName) return;
   if (wsReconnectTimer) return;
   wsReconnectTimer = setTimeout(() => {
     wsReconnectTimer = null;
@@ -3143,46 +3231,315 @@ let serverClockOffsetMs = 0; // localNow - serverNow
 let haveServerClock = false;
 function serverNowMs() { return Date.now() - serverClockOffsetMs; }
 
+const CHARACTER_LIST_STORAGE_KEY = "playerCharacters";
+const LAST_CHARACTER_STORAGE_KEY = "playerName";
+
 let myName = (() => {
   try {
-    const saved = localStorage.getItem("playerName");
+    const saved = localStorage.getItem(LAST_CHARACTER_STORAGE_KEY);
     return (typeof saved === "string" && saved.trim()) ? saved.trim() : null;
   } catch {
     return null;
   }
 })();
 let nameSent = false;
+let titleUi = null;
+let titleScreenState = "title";
+let selectedCharacterName = myName;
+let pendingCharacterName = null;
+let pendingCharacterMode = "load";
+let activeCharacterName = null;
+let suppressAutoJoin = false;
 
-function promptForName() {
-  // Only prompt once per page load unless rejected.
-  while (true) {
-    const raw = window.prompt("Enter your name (letters only, 4-8 chars):", myName || "") || "";
-    const name = raw.trim();
-    if (/^[A-Za-z]{4,8}$/.test(name)) {
-      myName = name;
-      try { localStorage.setItem("playerName", myName); } catch {}
-      if (ws && ws.readyState === 1) {
-        ws.send(JSON.stringify({ type: "setName", name }));
-        nameSent = true;
-      }
-      break;
-    }
-    alert("Name must be letters only, 4-8 characters.");
+function isTitleScreenOpen() {
+  const ui = titleUi || initTitleScreenUi();
+  return !!ui?.overlay?.classList.contains("open");
+}
+
+function setGameplayVisibility(show) {
+  try {
+    canvas.style.visibility = show ? "visible" : "hidden";
+  } catch {}
+  try {
+    if (invBtn) invBtn.style.display = show ? "" : "none";
+  } catch {}
+  if (!show) {
+    setMainMenuOpen(false);
+    if (typeof clearMovementKeysAndSend === "function") clearMovementKeysAndSend();
   }
+}
+
+function normalizeCharacterName(name) {
+  return (name ?? "").toString().trim();
+}
+
+function isValidCharacterName(name) {
+  return /^[A-Za-z]{4,8}$/.test(normalizeCharacterName(name));
+}
+
+function loadStoredCharacters() {
+  try {
+    const raw = localStorage.getItem(CHARACTER_LIST_STORAGE_KEY);
+    const parsed = JSON.parse(raw || "[]");
+    if (!Array.isArray(parsed)) return [];
+    return parsed.map(normalizeCharacterName).filter(isValidCharacterName);
+  } catch {
+    return [];
+  }
+}
+
+function saveStoredCharacters(names) {
+  try {
+    const clean = Array.from(new Set((names || []).map(normalizeCharacterName).filter(isValidCharacterName)));
+    localStorage.setItem(CHARACTER_LIST_STORAGE_KEY, JSON.stringify(clean));
+  } catch {}
+}
+
+function rememberCharacter(name) {
+  const clean = normalizeCharacterName(name);
+  if (!isValidCharacterName(clean)) return;
+  const names = loadStoredCharacters();
+  if (!names.includes(clean)) names.unshift(clean);
+  saveStoredCharacters([clean, ...names]);
+  try { localStorage.setItem(LAST_CHARACTER_STORAGE_KEY, clean); } catch {}
+}
+
+function initTitleScreenUi() {
+  if (titleUi) return titleUi;
+  titleUi = {
+    overlay: document.getElementById("titleScreenOverlay"),
+    title: document.getElementById("titleScreenTitle"),
+    subtitle: document.getElementById("titleScreenSubtitle"),
+    error: document.getElementById("titleScreenError"),
+    list: document.getElementById("characterList"),
+    form: document.getElementById("characterCreateForm"),
+    input: document.getElementById("characterNameInput"),
+    actions: document.getElementById("titleScreenActions"),
+  };
+  if (titleUi.input) {
+    titleUi.input.addEventListener("keydown", (e) => {
+      if (e.key === "Enter" && titleScreenState === "create") {
+        e.preventDefault();
+        submitCharacterCreate();
+      }
+    });
+  }
+  return titleUi;
+}
+
+function setTitleScreenError(msg) {
+  const ui = initTitleScreenUi();
+  if (!ui.error) return;
+  const text = normalizeCharacterName(msg);
+  ui.error.textContent = text;
+  ui.error.classList.toggle("hidden", !text);
+}
+
+function openTitleScreen(state = "title") {
+  const ui = initTitleScreenUi();
+  titleScreenState = state;
+  setTitleScreenError("");
+  setGameplayVisibility(false);
+  ui.overlay?.classList.add("open");
+  ui.overlay?.setAttribute("aria-hidden", "false");
+  renderTitleScreen();
+}
+
+function closeTitleScreen() {
+  const ui = initTitleScreenUi();
+  ui.overlay?.classList.remove("open");
+  ui.overlay?.setAttribute("aria-hidden", "true");
+  setTitleScreenError("");
+  setGameplayVisibility(true);
+}
+
+function renderTitleActions(buttons) {
+  const ui = initTitleScreenUi();
+  if (!ui.actions) return;
+  ui.actions.innerHTML = "";
+  for (const b of buttons) {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = `title-screen-btn${b.primary ? " primary" : ""}`;
+    btn.textContent = b.label;
+    btn.disabled = !!b.disabled;
+    btn.addEventListener("click", b.onClick);
+    ui.actions.appendChild(btn);
+  }
+}
+
+function showTitleLanding() {
+  const ui = initTitleScreenUi();
+  ui.title.textContent = "Mini MMO";
+  ui.subtitle.textContent = "Choose a character or create a new one.";
+  ui.list.classList.add("hidden");
+  ui.form.classList.add("hidden");
+  renderTitleActions([
+    { label: "Play", primary: true, onClick: () => openTitleScreen("select") },
+    { label: "Create Character", onClick: () => openTitleScreen("create") },
+  ]);
+}
+
+function showCharacterSelect() {
+  const ui = initTitleScreenUi();
+  const names = loadStoredCharacters();
+  if ((!selectedCharacterName || !names.includes(selectedCharacterName)) && names.length) {
+    selectedCharacterName = names[0];
+  }
+  ui.title.textContent = "Select Character";
+  ui.subtitle.textContent = names.length ? "Choose who you want to play." : "No saved local character names yet. Create one to get started.";
+  ui.list.innerHTML = "";
+  ui.list.classList.toggle("hidden", names.length === 0);
+  ui.form.classList.add("hidden");
+  for (const name of names) {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = `title-screen-char${selectedCharacterName === name ? " selected" : ""}`;
+    btn.innerHTML = `<div class="title-screen-char-name">${name}</div><div class="title-screen-char-meta">Saved on this device</div>`;
+    btn.addEventListener("click", () => {
+      selectedCharacterName = name;
+      renderTitleScreen();
+    });
+    ui.list.appendChild(btn);
+  }
+  renderTitleActions([
+    { label: "Back", onClick: () => openTitleScreen("title") },
+    { label: "Create Character", onClick: () => openTitleScreen("create") },
+    { label: "Enter World", primary: true, disabled: !selectedCharacterName, onClick: () => beginCharacterSession(selectedCharacterName) },
+  ]);
+}
+
+function showCharacterCreate() {
+  const ui = initTitleScreenUi();
+  ui.title.textContent = "Create Character";
+  ui.subtitle.textContent = "This keeps using your current name-based save system.";
+  ui.list.classList.add("hidden");
+  ui.form.classList.remove("hidden");
+  if (ui.input) {
+    ui.input.value = "";
+    setTimeout(() => ui.input.focus(), 0);
+  }
+  renderTitleActions([
+    { label: "Back", onClick: () => openTitleScreen("select") },
+    { label: "Create & Play", primary: true, onClick: submitCharacterCreate },
+  ]);
+}
+
+function renderTitleScreen() {
+  if (titleScreenState === "select") return showCharacterSelect();
+  if (titleScreenState === "create") return showCharacterCreate();
+  return showTitleLanding();
+}
+
+function closeAllOverlaysForCharacterMenu() {
+  setMainMenuOpen(false);
+  if (inventoryOpen) toggleInventory();
+  if (skillsOpen) toggleSkills();
+  if (monsterBookOpen) toggleMonsterBook();
+
+  if (typeof closeInvItemMenu === "function") {
+    closeInvItemMenu();
+  } else {
+    if (typeof invItemMenu !== "undefined") invItemMenu = null;
+    if (typeof invItemMenuUI !== "undefined") invItemMenuUI = null;
+    if (typeof dropConfirm !== "undefined") dropConfirm = null;
+    if (typeof pendingItemBind !== "undefined") pendingItemBind = null;
+  }
+}
+
+function resetClientWorldForTitleScreen() {
+  myId = null;
+  worldPlayers = {};
+  worldNpcs = {};
+  worldMobs = {};
+  worldDrops = {};
+  worldProjectiles = {};
+  whirlpools = [];
+  portals = [];
+}
+
+function disconnectCharacterSession() {
+  activeCharacterName = null;
+  pendingCharacterName = null;
+  pendingCharacterMode = "load";
+  nameSent = false;
+  clearMovementKeysAndSend();
+  if (ws) {
+    try {
+      ws.onmessage = null;
+      ws.close();
+    } catch {}
+  }
+  ws = null;
+  if (wsReconnectTimer) {
+    clearTimeout(wsReconnectTimer);
+    wsReconnectTimer = null;
+  }
+  resetClientWorldForTitleScreen();
+}
+
+function returnToCharacterSelect() {
+  suppressAutoJoin = true;
+  selectedCharacterName = myName && isValidCharacterName(myName) ? myName : selectedCharacterName;
+  closeAllOverlaysForCharacterMenu();
+  disconnectCharacterSession();
+  openTitleScreen("select");
+}
+
+function beginCharacterSession(name, mode = "load") {
+  const clean = normalizeCharacterName(name);
+  if (!isValidCharacterName(clean)) {
+    setTitleScreenError("Name must be letters only, 4-8 characters.");
+    return;
+  }
+  const joinMode = mode === "create" ? "create" : "load";
+  suppressAutoJoin = false;
+  selectedCharacterName = clean;
+  pendingCharacterName = clean;
+  pendingCharacterMode = joinMode;
+  myName = clean;
+  if (joinMode !== "create") rememberCharacter(clean);
+  setTitleScreenError("");
+
+  if (ws && ws.readyState === 1) {
+    ws.send(JSON.stringify({ type: "setName", name: clean, mode: joinMode }));
+    nameSent = true;
+    return;
+  }
+
+  connectWs();
+}
+
+function submitCharacterCreate() {
+  const ui = initTitleScreenUi();
+  const clean = normalizeCharacterName(ui.input?.value || "");
+  if (!isValidCharacterName(clean)) {
+    setTitleScreenError("Name must be letters only, 4-8 characters.");
+    ui.input?.focus();
+    return;
+  }
+  const existing = loadStoredCharacters();
+  if (existing.includes(clean)) {
+    setTitleScreenError("That character already exists on this device. Pick it from the list instead.");
+    ui.input?.focus();
+    ui.input?.select?.();
+    return;
+  }
+  beginCharacterSession(clean, "create");
 }
 
 function handleWsOpen() {
-  if (myName && /^[A-Za-z]{4,8}$/.test(myName)) {
-    if (ws && ws.readyState === 1) {
-      ws.send(JSON.stringify({ type: "setName", name: myName }));
-      nameSent = true;
-    }
+  const joinName = pendingCharacterName || (!suppressAutoJoin && myName && isValidCharacterName(myName) ? myName : null);
+  const joinMode = pendingCharacterName ? pendingCharacterMode : "load";
+  if (joinName) {
+    ws.send(JSON.stringify({ type: "setName", name: joinName, mode: joinMode }));
+    nameSent = true;
     return;
   }
-  promptForName();
+  openTitleScreen(suppressAutoJoin ? "select" : "title");
 }
 
-connectWs();
+openTitleScreen("title");
 
 
 let myId = null;
@@ -3834,14 +4191,20 @@ function handleWsMessage(e) {
   const msg = JSON.parse(e.data);
 
   if (msg.type === "nameRejected") {
-    // Re-prompt (server-side validation is source of truth)
     nameSent = false;
-    setTimeout(promptForName, 0);
+    pendingCharacterName = null;
+    pendingCharacterMode = "load";
+    openTitleScreen(titleScreenState === "create" ? "create" : "select");
+    setTitleScreenError(msg.reason || "That name was rejected by the server.");
     return;
   }
   if (msg.type === "nameAccepted") {
     myName = msg.name || myName;
-    try { if (myName) localStorage.setItem("playerName", myName); } catch {}
+    activeCharacterName = myName;
+    pendingCharacterName = null;
+    pendingCharacterMode = "load";
+    if (myName) rememberCharacter(myName);
+    closeTitleScreen();
     return;
   }
 
@@ -4259,7 +4622,8 @@ if (msg.type === "levelup") {
 /* ======================
    INPUT
 ====================== */
-const keys = { up:false, down:false, left:false, right:false };
+var keys = globalThis.keys || { up:false, down:false, left:false, right:false };
+globalThis.keys = keys;
 let lastEPressed = 0;
 
 // Double-tap detection for Dash Slash (Skill 3, sword-only).
@@ -4308,16 +4672,18 @@ function maybeTriggerDashSlashFromMoveKey(dir, e) {
 }
 
 function sendInput() {
+  if (!ws || ws.readyState !== 1) return;
+
   // While channeling Healing Cloud, freeze movement inputs so the player cannot move.
   if (skill6CastArmed && typeof performance !== "undefined") {
     const nowUi = performance.now();
     if (nowUi < skill6CastEndClientMs) {
       const frozen = { up:false, down:false, left:false, right:false };
-      if (ws.readyState === 1) ws.send(JSON.stringify({ type: "input", ...frozen }));
+      ws.send(JSON.stringify({ type: "input", ...frozen }));
       return;
     }
   }
-  if (ws.readyState === 1) ws.send(JSON.stringify({ type: "input", ...keys }));
+  ws.send(JSON.stringify({ type: "input", ...keys }));
 }
 
 function setMoveKey(e, down) {
@@ -4676,6 +5042,16 @@ function sendSkill4WideSlash() {
 
 
 window.addEventListener("keydown", (e) => {
+  if (isTitleScreenOpen()) {
+    const target = e.target;
+    const isTypingIntoTitleInput = target && (target.id === "characterNameInput" || target.closest?.("#characterCreateForm"));
+    if (!isTypingIntoTitleInput) {
+      clearMovementKeysAndSend();
+    }
+    if (isTypingIntoTitleInput) return;
+    return;
+  }
+
   const key = e.key;
   const k = key.toLowerCase();
 
@@ -4912,16 +5288,24 @@ return;
 });
 
 
-window.addEventListener("keyup", (e) => setMoveKey(e, false));
+window.addEventListener("keyup", (e) => {
+  if (isTitleScreenOpen()) {
+    clearMovementKeysAndSend();
+    return;
+  }
+  setMoveKey(e, false);
+});
 
 // Prevent "stuck walking" if the window loses and regains focus while
 // movement keys are held (the browser may never send the keyup event).
 function clearMovementKeysAndSend() {
-  keys.up = false;
-  keys.down = false;
-  keys.left = false;
-  keys.right = false;
-  sendInput();
+  const movementKeys = globalThis.keys;
+  if (!movementKeys) return;
+  movementKeys.up = false;
+  movementKeys.down = false;
+  movementKeys.left = false;
+  movementKeys.right = false;
+  if (typeof sendInput === "function") sendInput();
 }
 
 window.addEventListener("blur", () => {
@@ -8462,6 +8846,8 @@ let last = performance.now();
 function recoverFromBackgroundResume(reason = "resume") {
   // Reset frame timer to avoid giant dt after backgrounding.
   last = performance.now();
+
+  if (!pendingCharacterName && !activeCharacterName) return;
 
   // Reconnect socket if mobile browser suspended/killed it.
   if (!ws || ws.readyState === WebSocket.CLOSED || ws.readyState === WebSocket.CLOSING) {
