@@ -524,39 +524,11 @@ function isMainMenuOpenDom() {
   return !!(mm && mm.classList.contains("open"));
 }
 
-function isTitleOverlayOpenDom() {
-  try {
-    if (typeof window.isTitleScreenOpen === "function") return !!window.isTitleScreenOpen();
-  } catch (_) {}
-  const overlay = document.getElementById("titleScreenOverlay");
-  return !!(overlay && overlay.classList.contains("open") && overlay.getAttribute("aria-hidden") !== "true");
-}
-
-function areTouchGameplayControlsBlocked() {
-  return isMainMenuOpenDom() || isTitleOverlayOpenDom();
-}
-
 function syncActionInteractivity() {
-  // When a menu/title overlay is open, make the action cluster non-interactive
-  // so it never blocks tapping UI.
-  const blocked = areTouchGameplayControlsBlocked();
-  actionWrap.style.pointerEvents = blocked ? "none" : "auto";
-}
-
-function syncTouchGameplayAvailability() {
-  const landscape = isLandscapeNow();
-  const blocked = areTouchGameplayControlsBlocked();
-  if (!landscape || blocked) {
-    onEnd(undefined);
-    stopAttackHold();
-    touchZone.style.display = "none";
-    actionWrap.style.display = "none";
-  } else {
-    touchZone.style.display = "block";
-    actionWrap.style.display = "grid";
-    positionActionCluster();
-  }
-  syncActionInteractivity();
+  // When the hamburger dropdown is open, make the action cluster non-interactive
+  // so it never blocks tapping menu items.
+  const open = isMainMenuOpenDom();
+  actionWrap.style.pointerEvents = open ? "none" : "auto";
 }
 
 function makeBtn(label, extraClass = "") {
@@ -579,49 +551,58 @@ try {
 
 // Fallback (in case the menu is created later)
 setInterval(() => {
-  try { syncTouchGameplayAvailability(); } catch (_) {}
+  try { syncActionInteractivity(); } catch (_) {}
 }, 250);
 
 const btnInteract = makeBtn("");
 btnInteract.setAttribute("aria-label", "Interact");
-const btnUp = makeBtn("", "mc-ghost");
-const btnDown = makeBtn("", "mc-ghost");
-const btnLeft = makeBtn("", "mc-ghost");
-const btnRight = makeBtn("", "mc-ghost");
+const attackWheel = document.createElement("div");
+attackWheel.className = "mc-action-btn mc-ghost";
+attackWheel.setAttribute("role", "button");
+attackWheel.setAttribute("aria-label", "Attack wheel");
+attackWheel.style.width = (ACTION_SIZE * 2 + ACTION_GAP) + "px";
+attackWheel.style.height = (ACTION_SIZE * 2 + ACTION_GAP) + "px";
+attackWheel.style.borderRadius = "999px";
+attackWheel.style.position = "relative";
+attackWheel.style.display = "flex";
+attackWheel.style.alignItems = "center";
+attackWheel.style.justifyContent = "center";
+attackWheel.style.background = "rgba(255,255,255,0.035)";
+attackWheel.style.borderColor = "rgba(255,255,255,0.08)";
+attackWheel.style.boxShadow = "inset 0 0 0 1px rgba(255,255,255,0.03)";
 
-// Position with CSS grid (we'll place the wrapper itself in JS per safe area)
+const attackWheelDot = document.createElement("div");
+attackWheelDot.style.width = "22px";
+attackWheelDot.style.height = "22px";
+attackWheelDot.style.borderRadius = "999px";
+attackWheelDot.style.background = "rgba(255,255,255,0.16)";
+attackWheelDot.style.border = "1px solid rgba(255,255,255,0.22)";
+attackWheelDot.style.pointerEvents = "none";
+attackWheelDot.style.transform = "translate(0px, 0px)";
+attackWheel.appendChild(attackWheelDot);
+
+// Position the wheel with a centered interact button over it.
 actionWrap.style.display = "none";
-actionWrap.style.width = (ACTION_SIZE * 3 + ACTION_GAP * 2) + "px";
-actionWrap.style.height = (ACTION_SIZE * 3 + ACTION_GAP * 2) + "px";
-actionWrap.style.display = "grid";
-actionWrap.style.gridTemplateColumns = `repeat(3, ${ACTION_SIZE}px)`;
-actionWrap.style.gridTemplateRows = `repeat(3, ${ACTION_SIZE}px)`;
-actionWrap.style.gap = ACTION_GAP + "px";
-actionWrap.style.alignItems = "center";
-actionWrap.style.justifyItems = "center";
+actionWrap.style.width = (ACTION_SIZE * 2 + ACTION_GAP) + "px";
+actionWrap.style.height = (ACTION_SIZE * 2 + ACTION_GAP) + "px";
+actionWrap.style.position = "fixed";
 
-// grid placement
-btnUp.style.gridColumn = "2";
-btnUp.style.gridRow = "1";
-btnLeft.style.gridColumn = "1";
-btnLeft.style.gridRow = "2";
-btnInteract.style.gridColumn = "2";
-btnInteract.style.gridRow = "2";
-btnRight.style.gridColumn = "3";
-btnRight.style.gridRow = "2";
-btnDown.style.gridColumn = "2";
-btnDown.style.gridRow = "3";
+attackWheel.style.position = "absolute";
+attackWheel.style.left = "0";
+attackWheel.style.top = "0";
+btnInteract.style.position = "absolute";
+btnInteract.style.left = "50%";
+btnInteract.style.top = "50%";
+btnInteract.style.transform = "translate(-50%, -50%)";
 
-// Make Interact more visible than ghost pads
+// Make Interact more visible than the wheel background
 btnInteract.style.background = "rgba(255,255,255,0.07)";
 btnInteract.style.borderColor = "rgba(255,255,255,0.16)";
 btnInteract.style.color = "rgba(255,255,255,0.75)";
+btnInteract.style.zIndex = "1";
 
-actionWrap.appendChild(btnUp);
-actionWrap.appendChild(btnLeft);
+actionWrap.appendChild(attackWheel);
 actionWrap.appendChild(btnInteract);
-actionWrap.appendChild(btnRight);
-actionWrap.appendChild(btnDown);
 
 function getMyWorldPos() {
   if (typeof window.getMyPos === "function") return window.getMyPos();
@@ -634,7 +615,7 @@ function getMyWorldPos() {
 }
 
 function doInteract() {
-  if (areTouchGameplayControlsBlocked()) return;
+  if (isMainMenuOpenDom()) return;
   try {
     if (typeof window.isOnPortal === "function" && window.isOnPortal()) {
       if (typeof window.startPortalFade === "function") { window.startPortalFade(); return; }
@@ -658,7 +639,7 @@ let holdActive = false;
 let holdDir = null;
 
 function startAttackDir(dx, dy) {
-  if (areTouchGameplayControlsBlocked()) return;
+  if (isMainMenuOpenDom()) return;
   const aim = aimWorldFromDir(dx, dy);
   if (!aim) return;
 
@@ -700,7 +681,7 @@ setInterval(tickHoldAim, 80);
 function bindPress(el, onDown, onUp) {
   el.addEventListener("pointerdown", (e) => {
     if (!isLandscapeNow()) return;
-    if (areTouchGameplayControlsBlocked()) return;
+    if (isMainMenuOpenDom()) return;
     e.preventDefault();
     e.stopPropagation();
     onDown(e);
@@ -723,20 +704,79 @@ function bindPress(el, onDown, onUp) {
 
 bindPress(btnInteract, () => doInteract());
 
-bindPress(btnUp, () => startAttackDir(0, -1), () => stopAttackHold());
-bindPress(btnDown, () => startAttackDir(0, 1), () => stopAttackHold());
-bindPress(btnLeft, () => startAttackDir(-1, 0), () => stopAttackHold());
-bindPress(btnRight, () => startAttackDir(1, 0), () => stopAttackHold());
+let attackWheelPointerId = null;
 
-window.addEventListener("blur", () => stopAttackHold());
-document.addEventListener("visibilitychange", () => { if (document.hidden) stopAttackHold(); });
+function setAttackWheelDot(dx, dy) {
+  const max = Math.max(0, (ACTION_SIZE * 2 + ACTION_GAP) / 2 - 20);
+  const len = Math.hypot(dx, dy) || 1;
+  const mag = Math.min(max, len);
+  attackWheelDot.style.transform = `translate(${Math.round((dx / len) * mag)}px, ${Math.round((dy / len) * mag)}px)`;
+}
+
+function resetAttackWheelDot() {
+  attackWheelDot.style.transform = "translate(0px, 0px)";
+}
+
+function wheelEventToDir(e) {
+  const r = attackWheel.getBoundingClientRect();
+  const cx = r.left + r.width / 2;
+  const cy = r.top + r.height / 2;
+  const dx = e.clientX - cx;
+  const dy = e.clientY - cy;
+  return { dx, dy };
+}
+
+function updateAttackWheelAim(e, isStart = false) {
+  const dir = wheelEventToDir(e);
+  setAttackWheelDot(dir.dx, dir.dy);
+  if (isStart) startAttackDir(dir.dx, dir.dy);
+  else if (holdActive) {
+    holdDir = { dx: dir.dx, dy: dir.dy };
+  }
+}
+
+attackWheel.addEventListener("pointerdown", (e) => {
+  if (!isLandscapeNow()) return;
+  if (isMainMenuOpenDom()) return;
+  e.preventDefault();
+  e.stopPropagation();
+  attackWheelPointerId = e.pointerId;
+  updateAttackWheelAim(e, true);
+  try { attackWheel.setPointerCapture(e.pointerId); } catch (_) {}
+}, { passive: false });
+
+attackWheel.addEventListener("pointermove", (e) => {
+  if (attackWheelPointerId == null || e.pointerId !== attackWheelPointerId) return;
+  e.preventDefault();
+  e.stopPropagation();
+  updateAttackWheelAim(e, false);
+}, { passive: false });
+
+function releaseAttackWheel(e) {
+  if (attackWheelPointerId == null) return;
+  if (e && e.pointerId != null && e.pointerId !== attackWheelPointerId) return;
+  if (e) {
+    e.preventDefault();
+    e.stopPropagation();
+    try { attackWheel.releasePointerCapture(e.pointerId); } catch (_) {}
+  }
+  attackWheelPointerId = null;
+  resetAttackWheelDot();
+  stopAttackHold();
+}
+
+attackWheel.addEventListener("pointerup", releaseAttackWheel, { passive: false });
+attackWheel.addEventListener("pointercancel", releaseAttackWheel, { passive: false });
+
+window.addEventListener("blur", () => { resetAttackWheelDot(); stopAttackHold(); });
+document.addEventListener("visibilitychange", () => { if (document.hidden) { resetAttackWheelDot(); stopAttackHold(); } });
 
 function positionActionCluster() {
   const vp = getVP();
   const safe = getSafeInsets();
 
-  const clusterW = ACTION_SIZE * 3 + ACTION_GAP * 2;
-  const clusterH = ACTION_SIZE * 3 + ACTION_GAP * 2;
+  const clusterW = ACTION_SIZE * 2 + ACTION_GAP;
+  const clusterH = ACTION_SIZE * 2 + ACTION_GAP;
 
   const minTop = safe.top + 84;
   const maxTop = vp.h - safe.bottom - clusterH - 84;
@@ -755,11 +795,12 @@ function positionActionCluster() {
 
     if (!landscape) {
       onEnd(undefined);
-      stopAttackHold();
       touchZone.style.display = "none";
       actionWrap.style.display = "none";
     } else {
-      syncTouchGameplayAvailability();
+      touchZone.style.display = "block";
+      actionWrap.style.display = "block";
+      positionActionCluster();
       resizeCanvasInternal();
       scheduleResizes();
       setTimeout(elevateHamburger, 0);
@@ -781,29 +822,6 @@ function positionActionCluster() {
       if (isLandscapeNow()) resizeCanvasInternal();
     });
     mo.observe(canvas, { attributes: true, attributeFilter: ["width", "height", "style"] });
-  }
-
-
-  function attachMenuStateObservers() {
-    try {
-      const overlay = document.getElementById("titleScreenOverlay");
-      if (overlay) {
-        const mo = new MutationObserver(() => {
-          syncTouchGameplayAvailability();
-        });
-        mo.observe(overlay, { attributes: true, attributeFilter: ["class", "style", "aria-hidden"] });
-      }
-    } catch (_) {}
-
-    try {
-      const mm = document.getElementById("mainMenu");
-      if (mm) {
-        const mo = new MutationObserver(() => {
-          syncTouchGameplayAvailability();
-        });
-        mo.observe(mm, { attributes: true, attributeFilter: ["class", "style", "aria-hidden"] });
-      }
-    } catch (_) {}
   }
 
   // Many games start after a "name confirm" button. Re-apply on first user interaction.
