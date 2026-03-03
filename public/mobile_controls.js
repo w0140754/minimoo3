@@ -504,20 +504,81 @@
   });
 
 
-// ===== Interact + Directional Attack buttons =====
-// Layout: a central Interact button with 4 directional attack pads around it.
-// By default:
-// - Interact is faintly visible (discoverable)
-// - Attack pads are "ghost" (nearly invisible) but still tappable; they brighten while pressed.
 
-const ACTION_SIZE = 72;
-const ACTION_GAP = 10;
-const ACTION_RANGE_PX = 220; // how far ahead to aim for directional attacks
+// ===== Interact + Attack Wheel =====
+// Layout: a circular attack wheel with a center Interact button.
+// The wheel supports angle-based aiming and hold-to-attack.
+
+const ACTION_WHEEL_SIZE = 188;
+const ACTION_KNOB_SIZE = 62;
+const ACTION_INTERACT_SIZE = 72;
+const ACTION_RANGE_PX = 220; // how far ahead to aim for attacks
 const ACTION_HOLD_REPEAT = true; // hold-to-attack (uses attackHold if available)
+const ACTION_DEADZONE = 16;
 
 const actionWrap = document.createElement("div");
 actionWrap.className = "mc-action-wrap";
 document.body.appendChild(actionWrap);
+
+actionWrap.style.display = "none";
+actionWrap.style.width = ACTION_WHEEL_SIZE + "px";
+actionWrap.style.height = ACTION_WHEEL_SIZE + "px";
+actionWrap.style.position = "fixed";
+actionWrap.style.zIndex = "2147483001";
+actionWrap.style.touchAction = "none";
+
+actionWrap.innerHTML = "";
+
+const wheelPad = document.createElement("div");
+wheelPad.className = "mc-action-wheel";
+wheelPad.style.position = "absolute";
+wheelPad.style.inset = "0";
+wheelPad.style.borderRadius = "999px";
+wheelPad.style.background = "radial-gradient(circle at 50% 50%, rgba(255,255,255,0.08) 0%, rgba(255,255,255,0.04) 48%, rgba(255,255,255,0.02) 70%, rgba(255,255,255,0.01) 100%)";
+wheelPad.style.border = "2px solid rgba(255,255,255,0.12)";
+wheelPad.style.boxSizing = "border-box";
+wheelPad.style.backdropFilter = "blur(2px)";
+wheelPad.style.webkitBackdropFilter = "blur(2px)";
+
+const wheelRing = document.createElement("div");
+wheelRing.style.position = "absolute";
+wheelRing.style.inset = "16px";
+wheelRing.style.borderRadius = "999px";
+wheelRing.style.border = "1px solid rgba(255,255,255,0.08)";
+wheelRing.style.pointerEvents = "none";
+
+const wheelKnob = document.createElement("div");
+wheelKnob.className = "mc-action-wheel-knob";
+wheelKnob.style.position = "absolute";
+wheelKnob.style.left = "50%";
+wheelKnob.style.top = "50%";
+wheelKnob.style.width = ACTION_KNOB_SIZE + "px";
+wheelKnob.style.height = ACTION_KNOB_SIZE + "px";
+wheelKnob.style.borderRadius = "999px";
+wheelKnob.style.transform = "translate(-50%, -50%)";
+wheelKnob.style.background = "rgba(255,255,255,0.10)";
+wheelKnob.style.border = "2px solid rgba(255,255,255,0.16)";
+wheelKnob.style.boxSizing = "border-box";
+wheelKnob.style.pointerEvents = "none";
+wheelKnob.style.transition = "transform 0.05s linear, background 0.12s ease, border-color 0.12s ease";
+
+const btnInteract = makeBtn("");
+btnInteract.setAttribute("aria-label", "Interact");
+btnInteract.style.position = "absolute";
+btnInteract.style.left = "50%";
+btnInteract.style.top = "50%";
+btnInteract.style.width = ACTION_INTERACT_SIZE + "px";
+btnInteract.style.height = ACTION_INTERACT_SIZE + "px";
+btnInteract.style.transform = "translate(-50%, -50%)";
+btnInteract.style.background = "rgba(255,255,255,0.08)";
+btnInteract.style.borderColor = "rgba(255,255,255,0.18)";
+btnInteract.style.color = "rgba(255,255,255,0.78)";
+btnInteract.style.zIndex = "2";
+
+wheelPad.appendChild(wheelRing);
+wheelPad.appendChild(wheelKnob);
+actionWrap.appendChild(wheelPad);
+actionWrap.appendChild(btnInteract);
 
 function isMainMenuOpenDom() {
   const mm = document.getElementById("mainMenu");
@@ -567,47 +628,6 @@ setInterval(() => {
   try { syncTouchGameplayAvailability(); } catch (_) {}
 }, 250);
 
-const btnInteract = makeBtn("");
-btnInteract.setAttribute("aria-label", "Interact");
-const btnUp = makeBtn("", "mc-ghost");
-const btnDown = makeBtn("", "mc-ghost");
-const btnLeft = makeBtn("", "mc-ghost");
-const btnRight = makeBtn("", "mc-ghost");
-
-// Position with CSS grid (we'll place the wrapper itself in JS per safe area)
-actionWrap.style.display = "none";
-actionWrap.style.width = (ACTION_SIZE * 3 + ACTION_GAP * 2) + "px";
-actionWrap.style.height = (ACTION_SIZE * 3 + ACTION_GAP * 2) + "px";
-actionWrap.style.display = "grid";
-actionWrap.style.gridTemplateColumns = `repeat(3, ${ACTION_SIZE}px)`;
-actionWrap.style.gridTemplateRows = `repeat(3, ${ACTION_SIZE}px)`;
-actionWrap.style.gap = ACTION_GAP + "px";
-actionWrap.style.alignItems = "center";
-actionWrap.style.justifyItems = "center";
-
-// grid placement
-btnUp.style.gridColumn = "2";
-btnUp.style.gridRow = "1";
-btnLeft.style.gridColumn = "1";
-btnLeft.style.gridRow = "2";
-btnInteract.style.gridColumn = "2";
-btnInteract.style.gridRow = "2";
-btnRight.style.gridColumn = "3";
-btnRight.style.gridRow = "2";
-btnDown.style.gridColumn = "2";
-btnDown.style.gridRow = "3";
-
-// Make Interact more visible than ghost pads
-btnInteract.style.background = "rgba(255,255,255,0.07)";
-btnInteract.style.borderColor = "rgba(255,255,255,0.16)";
-btnInteract.style.color = "rgba(255,255,255,0.75)";
-
-actionWrap.appendChild(btnUp);
-actionWrap.appendChild(btnLeft);
-actionWrap.appendChild(btnInteract);
-actionWrap.appendChild(btnRight);
-actionWrap.appendChild(btnDown);
-
 function getMyWorldPos() {
   if (typeof window.getMyPos === "function") return window.getMyPos();
   try {
@@ -641,6 +661,13 @@ function aimWorldFromDir(dx, dy) {
 
 let holdActive = false;
 let holdDir = null;
+let wheelPointerId = null;
+
+function resetWheelKnob() {
+  wheelKnob.style.transform = "translate(-50%, -50%)";
+  wheelKnob.style.background = "rgba(255,255,255,0.10)";
+  wheelKnob.style.borderColor = "rgba(255,255,255,0.16)";
+}
 
 function startAttackDir(dx, dy) {
   if (isMainMenuOpenDom()) return;
@@ -652,9 +679,11 @@ function startAttackDir(dx, dy) {
   } catch (_) {}
 
   if (ACTION_HOLD_REPEAT && typeof window.sendAttackHoldState === "function") {
-    holdActive = true;
+    if (!holdActive) {
+      holdActive = true;
+      window.sendAttackHoldState(true, aim.wx, aim.wy);
+    }
     holdDir = { dx, dy };
-    window.sendAttackHoldState(true, aim.wx, aim.wy);
   } else if (typeof window.sendAttackAtWorld === "function") {
     window.sendAttackAtWorld(aim.wx, aim.wy);
   } else if (typeof window.sendAttack === "function") {
@@ -685,7 +714,7 @@ setInterval(tickHoldAim, 80);
 function bindPress(el, onDown, onUp) {
   el.addEventListener("pointerdown", (e) => {
     if (!isLandscapeNow()) return;
-    if (isMainMenuOpenDom()) return;
+    if (areTouchGameplayControlsBlocked()) return;
     e.preventDefault();
     e.stopPropagation();
     onDown(e);
@@ -706,22 +735,75 @@ function bindPress(el, onDown, onUp) {
   }, { passive: false });
 }
 
+function updateWheelAimFromEvent(e) {
+  if (areTouchGameplayControlsBlocked()) return;
+  const rect = wheelPad.getBoundingClientRect();
+  const cx = rect.left + rect.width / 2;
+  const cy = rect.top + rect.height / 2;
+  const dx = e.clientX - cx;
+  const dy = e.clientY - cy;
+  const dist = Math.hypot(dx, dy);
+  const maxMove = (ACTION_WHEEL_SIZE - ACTION_KNOB_SIZE) / 2 - 10;
+
+  if (dist < ACTION_DEADZONE) {
+    wheelKnob.style.transform = "translate(-50%, -50%)";
+    if (holdActive) stopAttackHold();
+    return;
+  }
+
+  const angle = Math.atan2(dy, dx);
+  const clamped = Math.min(dist, maxMove);
+  const nx = Math.cos(angle) * clamped;
+  const ny = Math.sin(angle) * clamped;
+  wheelKnob.style.transform = `translate(calc(-50% + ${nx}px), calc(-50% + ${ny}px))`;
+  wheelKnob.style.background = "rgba(255,255,255,0.18)";
+  wheelKnob.style.borderColor = "rgba(255,255,255,0.26)";
+  startAttackDir(Math.cos(angle), Math.sin(angle));
+}
+
 bindPress(btnInteract, () => doInteract());
 
-bindPress(btnUp, () => startAttackDir(0, -1), () => stopAttackHold());
-bindPress(btnDown, () => startAttackDir(0, 1), () => stopAttackHold());
-bindPress(btnLeft, () => startAttackDir(-1, 0), () => stopAttackHold());
-bindPress(btnRight, () => startAttackDir(1, 0), () => stopAttackHold());
+wheelPad.addEventListener("pointerdown", (e) => {
+  if (!isLandscapeNow()) return;
+  if (areTouchGameplayControlsBlocked()) return;
+  e.preventDefault();
+  e.stopPropagation();
+  wheelPointerId = e.pointerId;
+  try { wheelPad.setPointerCapture(e.pointerId); } catch (_) {}
+  updateWheelAimFromEvent(e);
+}, { passive: false });
 
-window.addEventListener("blur", () => stopAttackHold());
-document.addEventListener("visibilitychange", () => { if (document.hidden) stopAttackHold(); });
+wheelPad.addEventListener("pointermove", (e) => {
+  if (wheelPointerId !== e.pointerId) return;
+  e.preventDefault();
+  e.stopPropagation();
+  updateWheelAimFromEvent(e);
+}, { passive: false });
+
+function endWheelPointer(e) {
+  if (wheelPointerId !== null && e && wheelPointerId !== e.pointerId) return;
+  if (e) {
+    e.preventDefault();
+    e.stopPropagation();
+    try { wheelPad.releasePointerCapture(e.pointerId); } catch (_) {}
+  }
+  wheelPointerId = null;
+  resetWheelKnob();
+  stopAttackHold();
+}
+
+wheelPad.addEventListener("pointerup", endWheelPointer, { passive: false });
+wheelPad.addEventListener("pointercancel", endWheelPointer, { passive: false });
+
+window.addEventListener("blur", () => { endWheelPointer(); stopAttackHold(); });
+document.addEventListener("visibilitychange", () => { if (document.hidden) { endWheelPointer(); stopAttackHold(); } });
 
 function positionActionCluster() {
   const vp = getVP();
   const safe = getSafeInsets();
 
-  const clusterW = ACTION_SIZE * 3 + ACTION_GAP * 2;
-  const clusterH = ACTION_SIZE * 3 + ACTION_GAP * 2;
+  const clusterW = ACTION_WHEEL_SIZE;
+  const clusterH = ACTION_WHEEL_SIZE;
 
   const minTop = safe.top + 84;
   const maxTop = vp.h - safe.bottom - clusterH - 84;
