@@ -2174,18 +2174,23 @@ ws.on("message", async (buf) => {
 
 	   if (msg.type === "setName") {
 	  const raw = (msg.name ?? "").toString().trim();
+	  const mode = msg.mode === "create" ? "create" : "load";
 	  if (!/^[A-Za-z]{4,8}$/.test(raw)) {
 		send(ws, { type: "nameRejected", reason: "Name must be letters only (4-8 chars)." });
 		return;
 	  }
 
+	  const existingRow = await dbLoadPlayerByName(raw);
+	  if (mode === "create" && existingRow) {
+		send(ws, { type: "nameRejected", reason: "That character name is already taken." });
+		return;
+	  }
+
 	  p.name = raw;
 
-	  // Try loading from database
-	  const row = await dbLoadPlayerByName(p.name);
-	  if (row) {
+	  if (existingRow) {
 		console.log(`🔁 Loaded player from DB: ${p.name}`);
-		applyRowToPlayer(p, row);
+		applyRowToPlayer(p, existingRow);
 	  } else {
 		console.log(`🆕 New player: ${p.name}`);
 		// Brand new character: always start on Map C at tile (16,5)
@@ -2195,7 +2200,7 @@ ws.on("message", async (buf) => {
 		p.hp = p.maxHp;
 	  }
 
-	  send(ws, { type: "nameAccepted", name: p.name });
+	  send(ws, { type: "nameAccepted", name: p.name, mode });
 	  // send persisted hotbar to client (so it loads across logins)
 	  send(ws, { type: "hotbarState", slots: p.hotbar || new Array(6).fill(null) });
 	  return;
