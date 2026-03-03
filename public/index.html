@@ -3,7 +3,7 @@
 <html>
 <head>
 <meta charset="utf-8"/>
-<title>Mini MMO</title>
+<title>Rookie Story</title>
 <style>
     body { background:#222; color:#ddd; font-family: system-ui, sans-serif; margin:0; min-height:100vh; display:flex; justify-content:center; align-items:flex-start; padding:16px 0; }
     canvas { border: 1px solid #555; image-rendering: pixelated; }
@@ -239,7 +239,43 @@
 .title-screen-btn:disabled{opacity:0.45; cursor:not-allowed;}
 .hidden{display:none !important;}
 
-  </style>
+  
+/* Title/Character screen layout (single consolidated select screen + preview) */
+.title-screen-grid{
+  display: grid;
+  grid-template-columns: 1.35fr 0.65fr;
+  gap: 14px;
+  align-items: stretch;
+}
+.title-screen-left{ display:flex; flex-direction:column; gap: 12px; }
+.title-screen-right{
+  border-radius: 18px;
+  background: rgba(255,255,255,0.05);
+  border: 1px solid rgba(255,255,255,0.12);
+  padding: 14px;
+  display:flex;
+  flex-direction:column;
+  gap: 10px;
+  align-items:flex-start;
+}
+.title-screen-right .preview-name{ font-weight: 700; font-size: 18px; }
+.title-screen-right .preview-meta{ font-size: 14px; opacity: 0.9; margin-top: -4px; }
+.title-screen-right .preview-action{ margin-top:auto; width:100%; }
+.title-screen-right .preview-action .title-screen-btn{ width:100%; }
+#characterPreviewCanvas{
+  width: 100%;
+  height: auto;
+  aspect-ratio: 1 / 1;
+  border-radius: 16px;
+  background: rgba(0,0,0,0.22);
+  border: 1px solid rgba(255,255,255,0.10);
+}
+
+@media (max-width: 760px){
+  .title-screen-grid{ grid-template-columns: 1fr; }
+}
+
+</style>
 <meta content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no" name="viewport"/><meta content="#000000" name="theme-color"/><meta content="yes" name="apple-mobile-web-app-capable"/><meta content="black-translucent" name="apple-mobile-web-app-status-bar-style"/><meta content="Mini MMO" name="apple-mobile-web-app-title"/><link href="/manifest.webmanifest" rel="manifest"/><link href="/icons/icon-180.png" rel="apple-touch-icon"/></head>
 <body>
 <div class="app-layout" id="appLayout">
@@ -256,17 +292,27 @@
 <canvas height="600" id="c" width="800"></canvas>
 <div class="title-screen-overlay" id="titleScreenOverlay" aria-hidden="true">
 <div class="title-screen-card" id="titleScreenCard">
-<div class="title-screen-eyebrow">Mini MMO</div>
-<h1 class="title-screen-title" id="titleScreenTitle">Welcome</h1>
-<p class="title-screen-subtitle" id="titleScreenSubtitle">Choose a character to begin.</p>
+<div class="title-screen-eyebrow" style="display:none">Mini MMO</div>
+<h1 class="title-screen-title" id="titleScreenTitle">Rookie Story</h1>
+<p class="title-screen-subtitle" id="titleScreenSubtitle" style="display:none">Choose a character to begin.</p>
 <div class="title-screen-error hidden" id="titleScreenError"></div>
-<div class="title-screen-list hidden" id="characterList"></div>
-<div class="title-screen-form hidden" id="characterCreateForm">
+<div class="title-screen-grid" id="titleScreenGrid">
+  <div class="title-screen-left">
+    <div class="title-screen-list hidden" id="characterList"></div>
+    <div class="title-screen-form hidden" id="characterCreateForm">
 <label class="title-screen-label" for="characterNameInput">Character name</label>
 <input id="characterNameInput" class="title-screen-input" type="text" maxlength="8" autocomplete="off" placeholder="Letters only, 4-8 chars" />
 <div class="title-screen-help">Names must be letters only, 4-8 characters.</div>
 </div>
-<div class="title-screen-actions" id="titleScreenActions"></div>
+    <div class="title-screen-actions" id="titleScreenActions"></div>
+  </div>
+  <div class="title-screen-right" id="characterPreviewPanel" aria-label="Character preview">
+    <canvas id="characterPreviewCanvas" width="180" height="180"></canvas>
+    <div class="preview-name" id="characterPreviewName"></div>
+    <div class="preview-meta" id="characterPreviewMeta"></div>
+    <div class="preview-action"><button type="button" class="title-screen-btn primary" id="previewConnectBtn" disabled>Connect</button></div>
+  </div>
+</div>
 </div>
 </div>
 
@@ -2514,6 +2560,7 @@ setTimeout(rebuildEditorObjectTiles, 0);
 setTimeout(rebuildEditorGroundTiles, 0);
 const playerSprite = new Image(); playerSprite.src = "/assets/player_image.png";
 const playerIdleSprite = new Image(); playerIdleSprite.src = "/assets/player_idle.png";
+const characterEmptyPreviewSprite = new Image(); characterEmptyPreviewSprite.src = "/player_silhouette.png";
 const npcSprite    = new Image(); npcSprite.src = "/assets/npc.png";
 
 // Static NPC images (new system)
@@ -3244,10 +3291,9 @@ let myName = (() => {
 })();
 let nameSent = false;
 let titleUi = null;
-let titleScreenState = "title";
-let selectedCharacterName = myName;
+let titleScreenState = "select";
+let selectedCharacterName = null;
 let pendingCharacterName = null;
-let pendingCharacterMode = "load";
 let activeCharacterName = null;
 let suppressAutoJoin = false;
 
@@ -3304,6 +3350,112 @@ function rememberCharacter(name) {
   try { localStorage.setItem(LAST_CHARACTER_STORAGE_KEY, clean); } catch {}
 }
 
+
+// --- Character preview meta (stored locally, updated during gameplay snapshots) ---
+const MAX_LOCAL_CHARACTERS = 3;
+const CHARACTER_META_KEY = "miniMMO.characterMeta";
+function loadCharacterMetaMap() {
+  try {
+    const raw = localStorage.getItem(CHARACTER_META_KEY);
+    const obj = JSON.parse(raw || "{}");
+    return (obj && typeof obj === "object") ? obj : {};
+  } catch { return {}; }
+}
+function saveCharacterMetaMap(obj) {
+  try { localStorage.setItem(CHARACTER_META_KEY, JSON.stringify(obj || {})); } catch {}
+}
+function drawPreviewSilhouette(ctx2, cvs) {
+  try {
+    const img = (typeof characterEmptyPreviewSprite !== "undefined") ? characterEmptyPreviewSprite : null;
+    if (img && img.complete && img.naturalWidth) {
+      ctx2.imageSmoothingEnabled = false;
+      const targetH = Math.floor(cvs.height * 0.80);
+      const targetW = Math.floor(cvs.width * 0.74);
+      const fit = Math.min(targetW / img.naturalWidth, targetH / img.naturalHeight);
+      const dw = Math.max(1, Math.floor(img.naturalWidth * fit));
+      const dh = Math.max(1, Math.floor(img.naturalHeight * fit));
+      const dx = Math.floor((cvs.width - dw) / 2);
+      const dy = Math.floor((cvs.height - dh) / 2) + 8;
+      ctx2.drawImage(img, dx, dy, dw, dh);
+      return true;
+    }
+    if (img && !img.__previewHooked) {
+      img.__previewHooked = true;
+      img.onload = () => {
+        try { updatePreviewForName(selectedCharacterName || null); } catch {}
+      };
+    }
+  } catch {}
+  return false;
+}
+
+function drawPreviewFallbackStick(ctx2, cvs) {
+  ctx2.save();
+  ctx2.strokeStyle = "rgba(255,255,255,0.72)";
+  ctx2.lineWidth = 2;
+  ctx2.beginPath();
+  ctx2.arc(cvs.width / 2, 62, 22, 0, Math.PI * 2);
+  ctx2.stroke();
+  ctx2.beginPath();
+  ctx2.moveTo(cvs.width / 2, 84);
+  ctx2.lineTo(cvs.width / 2, 128);
+  ctx2.moveTo(cvs.width / 2 - 26, 102);
+  ctx2.lineTo(cvs.width / 2 + 26, 102);
+  ctx2.moveTo(cvs.width / 2, 128);
+  ctx2.lineTo(cvs.width / 2 - 20, 158);
+  ctx2.moveTo(cvs.width / 2, 128);
+  ctx2.lineTo(cvs.width / 2 + 20, 158);
+  ctx2.stroke();
+  ctx2.restore();
+}
+
+function updatePreviewForName(name) {
+  const nameEl = document.getElementById("characterPreviewName");
+  const metaEl = document.getElementById("characterPreviewMeta");
+  const cvs = document.getElementById("characterPreviewCanvas");
+  const connectBtn = document.getElementById("previewConnectBtn");
+  if (!nameEl || !metaEl || !cvs) return;
+
+  const ctx2 = cvs.getContext("2d");
+  ctx2.clearRect(0,0,cvs.width,cvs.height);
+
+  if (connectBtn) {
+    connectBtn.disabled = !name;
+    connectBtn.onclick = name ? (() => beginCharacterSession(name)) : null;
+  }
+
+  if (!name) {
+    nameEl.textContent = "";
+    metaEl.textContent = "";
+    drawPreviewSilhouette(ctx2, cvs);
+    return;
+  }
+
+  nameEl.textContent = name;
+
+  const meta = loadCharacterMetaMap();
+  const m = meta[name] || null;
+  const lvl = (m && Number.isFinite(m.level)) ? m.level : null;
+  metaEl.textContent = lvl ? `Level ${lvl}` : "Level 1";
+
+  try {
+    const img = (typeof playerIdleSprite !== "undefined") ? playerIdleSprite : null;
+    if (img && img.complete && img.naturalWidth) {
+      ctx2.imageSmoothingEnabled = false;
+      const sw = 64, sh = 64;
+      const scale = 2.1;
+      const dw = sw * scale;
+      const dh = sh * scale;
+      const dx = (cvs.width - dw) / 2;
+      const dy = (cvs.height - dh) / 2 + 8;
+      ctx2.drawImage(img, 0, 0, sw, sh, dx, dy, dw, dh);
+    } else {
+      drawPreviewFallbackStick(ctx2, cvs);
+    }
+  } catch {}
+}
+
+
 function initTitleScreenUi() {
   if (titleUi) return titleUi;
   titleUi = {
@@ -3335,10 +3487,11 @@ function setTitleScreenError(msg) {
   ui.error.classList.toggle("hidden", !text);
 }
 
-function openTitleScreen(state = "title") {
+function openTitleScreen(state = "select") {
   const ui = initTitleScreenUi();
   titleScreenState = state;
-  setTitleScreenError("");
+    if (titleScreenState === "title") titleScreenState = "select";
+setTitleScreenError("");
   setGameplayVisibility(false);
   ui.overlay?.classList.add("open");
   ui.overlay?.setAttribute("aria-hidden", "false");
@@ -3368,26 +3521,23 @@ function renderTitleActions(buttons) {
   }
 }
 
-function showTitleLanding() {
-  const ui = initTitleScreenUi();
-  ui.title.textContent = "Mini MMO";
-  ui.subtitle.textContent = "Choose a character or create a new one.";
-  ui.list.classList.add("hidden");
-  ui.form.classList.add("hidden");
-  renderTitleActions([
-    { label: "Play", primary: true, onClick: () => openTitleScreen("select") },
-    { label: "Create Character", onClick: () => openTitleScreen("create") },
-  ]);
+function showTitleLanding(){
+  return showCharacterSelect();
 }
 
 function showCharacterSelect() {
+  const preview = document.getElementById("characterPreviewPanel");
+  if (preview) preview.style.display = "";
+
   const ui = initTitleScreenUi();
   const names = loadStoredCharacters();
-  if ((!selectedCharacterName || !names.includes(selectedCharacterName)) && names.length) {
-    selectedCharacterName = names[0];
+  const canCreateCharacter = names.length < MAX_LOCAL_CHARACTERS;
+  if (selectedCharacterName && !names.includes(selectedCharacterName)) {
+    selectedCharacterName = null;
   }
-  ui.title.textContent = "Select Character";
-  ui.subtitle.textContent = names.length ? "Choose who you want to play." : "No saved local character names yet. Create one to get started.";
+  try { updatePreviewForName(selectedCharacterName || null); } catch {}
+  ui.title.textContent = "Rookie Story";
+  ui.subtitle.textContent = "";
   ui.list.innerHTML = "";
   ui.list.classList.toggle("hidden", names.length === 0);
   ui.form.classList.add("hidden");
@@ -3398,19 +3548,30 @@ function showCharacterSelect() {
     btn.innerHTML = `<div class="title-screen-char-name">${name}</div><div class="title-screen-char-meta">Saved on this device</div>`;
     btn.addEventListener("click", () => {
       selectedCharacterName = name;
+      try { updatePreviewForName(name); } catch {}
       renderTitleScreen();
     });
     ui.list.appendChild(btn);
   }
-  renderTitleActions([
-    { label: "Back", onClick: () => openTitleScreen("title") },
-    { label: "Create Character", onClick: () => openTitleScreen("create") },
-    { label: "Enter World", primary: true, disabled: !selectedCharacterName, onClick: () => beginCharacterSession(selectedCharacterName) },
-  ]);
+  const actions = [];
+  if (canCreateCharacter) {
+    actions.push({ label: "Create Character", onClick: () => openTitleScreen("create") });
+  }
+  renderTitleActions(actions);
+  try { updatePreviewForName(selectedCharacterName || null); } catch {}
 }
 
 function showCharacterCreate() {
+  const preview = document.getElementById("characterPreviewPanel");
+  if (preview) preview.style.display = "none";
+
   const ui = initTitleScreenUi();
+  const names = loadStoredCharacters();
+  if (names.length >= MAX_LOCAL_CHARACTERS) {
+    titleScreenState = "select";
+    setTitleScreenError("You can only have up to 3 characters.");
+    return showCharacterSelect();
+  }
   ui.title.textContent = "Create Character";
   ui.subtitle.textContent = "This keeps using your current name-based save system.";
   ui.list.classList.add("hidden");
@@ -3421,7 +3582,7 @@ function showCharacterCreate() {
   }
   renderTitleActions([
     { label: "Back", onClick: () => openTitleScreen("select") },
-    { label: "Create & Play", primary: true, onClick: submitCharacterCreate },
+    { label: "Create", primary: true, onClick: submitCharacterCreate },
   ]);
 }
 
@@ -3461,7 +3622,6 @@ function resetClientWorldForTitleScreen() {
 function disconnectCharacterSession() {
   activeCharacterName = null;
   pendingCharacterName = null;
-  pendingCharacterMode = "load";
   nameSent = false;
   clearMovementKeysAndSend();
   if (ws) {
@@ -3480,29 +3640,27 @@ function disconnectCharacterSession() {
 
 function returnToCharacterSelect() {
   suppressAutoJoin = true;
-  selectedCharacterName = myName && isValidCharacterName(myName) ? myName : selectedCharacterName;
+  selectedCharacterName = null;
   closeAllOverlaysForCharacterMenu();
   disconnectCharacterSession();
   openTitleScreen("select");
 }
 
-function beginCharacterSession(name, mode = "load") {
+function beginCharacterSession(name) {
   const clean = normalizeCharacterName(name);
   if (!isValidCharacterName(clean)) {
     setTitleScreenError("Name must be letters only, 4-8 characters.");
     return;
   }
-  const joinMode = mode === "create" ? "create" : "load";
   suppressAutoJoin = false;
   selectedCharacterName = clean;
   pendingCharacterName = clean;
-  pendingCharacterMode = joinMode;
   myName = clean;
-  if (joinMode !== "create") rememberCharacter(clean);
+  rememberCharacter(clean);
   setTitleScreenError("");
 
   if (ws && ws.readyState === 1) {
-    ws.send(JSON.stringify({ type: "setName", name: clean, mode: joinMode }));
+    ws.send(JSON.stringify({ type: "setName", name: clean }));
     nameSent = true;
     return;
   }
@@ -3525,21 +3683,24 @@ function submitCharacterCreate() {
     ui.input?.select?.();
     return;
   }
-  beginCharacterSession(clean, "create");
+  rememberCharacter(clean);
+  selectedCharacterName = clean;
+  try { updatePreviewForName(clean); } catch {}
+  setTitleScreenError("");
+  openTitleScreen("select");
 }
 
 function handleWsOpen() {
   const joinName = pendingCharacterName || (!suppressAutoJoin && myName && isValidCharacterName(myName) ? myName : null);
-  const joinMode = pendingCharacterName ? pendingCharacterMode : "load";
   if (joinName) {
-    ws.send(JSON.stringify({ type: "setName", name: joinName, mode: joinMode }));
+    ws.send(JSON.stringify({ type: "setName", name: joinName }));
     nameSent = true;
     return;
   }
   openTitleScreen(suppressAutoJoin ? "select" : "title");
 }
 
-openTitleScreen("title");
+openTitleScreen("select");
 
 
 let myId = null;
@@ -4193,16 +4354,13 @@ function handleWsMessage(e) {
   if (msg.type === "nameRejected") {
     nameSent = false;
     pendingCharacterName = null;
-    pendingCharacterMode = "load";
     openTitleScreen(titleScreenState === "create" ? "create" : "select");
     setTitleScreenError(msg.reason || "That name was rejected by the server.");
     return;
   }
   if (msg.type === "nameAccepted") {
     myName = msg.name || myName;
-    activeCharacterName = myName;
     pendingCharacterName = null;
-    pendingCharacterMode = "load";
     if (myName) rememberCharacter(myName);
     closeTitleScreen();
     return;
@@ -4405,6 +4563,24 @@ if (Array.isArray(msg.whirlpools)) whirlpools = msg.whirlpools;
     if (typeof msg.portalTile === "number") PORTAL_TILE = msg.portalTile;
 
     worldPlayers = msg.players || {};
+
+    // Update local character preview meta (level/equipment) for menus
+    try {
+      if (typeof myId !== "undefined" && myId && worldPlayers && worldPlayers[myId]) {
+        const meP = worldPlayers[myId];
+        const nm = (meP.name || activeCharacterName || myName || "").toString();
+        if (nm) {
+          const meta = loadCharacterMetaMap();
+          meta[nm] = {
+            level: Number.isFinite(meP.level) ? meP.level : (meta[nm]?.level || 1),
+            equipment: (meP.equipment && typeof meP.equipment === "object") ? meP.equipment : (meta[nm]?.equipment || null),
+            updatedAt: Date.now(),
+          };
+          saveCharacterMetaMap(meta);
+        }
+      }
+    } catch {}
+
     worldNpcs = msg.npcs || {};
     const prevMobs = worldMobs;
     worldMobs = msg.mobs || {};

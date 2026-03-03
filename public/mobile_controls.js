@@ -506,78 +506,84 @@
 
 
 // ===== Interact + Attack Wheel =====
-// Layout: a circular attack wheel with a center Interact button.
-// The wheel supports angle-based aiming and hold-to-attack.
-
-const ACTION_WHEEL_SIZE = 188;
-const ACTION_KNOB_SIZE = 62;
-const ACTION_INTERACT_SIZE = 72;
-const ACTION_RANGE_PX = 220; // how far ahead to aim for attacks
-const ACTION_HOLD_REPEAT = true; // hold-to-attack (uses attackHold if available)
-const ACTION_DEADZONE = 16;
+const ACTION_SIZE = 72;
+const ACTION_RANGE_PX = 220;
+const ACTION_HOLD_REPEAT = true;
+const WHEEL_SIZE = 132;
+const WHEEL_INNER_SIZE = 54;
+const WHEEL_KNOB_SIZE = 38;
+const WHEEL_DEADZONE = 14;
 
 const actionWrap = document.createElement("div");
 actionWrap.className = "mc-action-wrap";
+actionWrap.style.display = "none";
+actionWrap.style.width = WHEEL_SIZE + "px";
+actionWrap.style.height = WHEEL_SIZE + "px";
 document.body.appendChild(actionWrap);
 
-actionWrap.style.display = "none";
-actionWrap.style.width = ACTION_WHEEL_SIZE + "px";
-actionWrap.style.height = ACTION_WHEEL_SIZE + "px";
-actionWrap.style.position = "fixed";
-actionWrap.style.zIndex = "2147483001";
-actionWrap.style.touchAction = "none";
+const attackWheel = document.createElement("div");
+attackWheel.setAttribute("role", "button");
+attackWheel.setAttribute("aria-label", "Attack wheel");
+attackWheel.style.cssText = `
+  position: absolute;
+  inset: 0;
+  border-radius: 999px;
+  background: rgba(255,255,255,0.025);
+  border: 1px solid rgba(255,255,255,0.08);
+  box-shadow: inset 0 0 0 1px rgba(255,255,255,0.03);
+  backdrop-filter: blur(1px);
+  -webkit-backdrop-filter: blur(1px);
+`;
 
-actionWrap.innerHTML = "";
-
-const wheelPad = document.createElement("div");
-wheelPad.className = "mc-action-wheel";
-wheelPad.style.position = "absolute";
-wheelPad.style.inset = "0";
-wheelPad.style.borderRadius = "999px";
-wheelPad.style.background = "radial-gradient(circle at 50% 50%, rgba(255,255,255,0.08) 0%, rgba(255,255,255,0.04) 48%, rgba(255,255,255,0.02) 70%, rgba(255,255,255,0.01) 100%)";
-wheelPad.style.border = "2px solid rgba(255,255,255,0.12)";
-wheelPad.style.boxSizing = "border-box";
-wheelPad.style.backdropFilter = "blur(2px)";
-wheelPad.style.webkitBackdropFilter = "blur(2px)";
-
-const wheelRing = document.createElement("div");
-wheelRing.style.position = "absolute";
-wheelRing.style.inset = "16px";
-wheelRing.style.borderRadius = "999px";
-wheelRing.style.border = "1px solid rgba(255,255,255,0.08)";
-wheelRing.style.pointerEvents = "none";
+const wheelInner = document.createElement("div");
+wheelInner.style.cssText = `
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: ${WHEEL_INNER_SIZE}px;
+  height: ${WHEEL_INNER_SIZE}px;
+  margin-left: -${WHEEL_INNER_SIZE / 2}px;
+  margin-top: -${WHEEL_INNER_SIZE / 2}px;
+  border-radius: 999px;
+  background: rgba(255,255,255,0.035);
+  border: 1px solid rgba(255,255,255,0.07);
+`;
 
 const wheelKnob = document.createElement("div");
-wheelKnob.className = "mc-action-wheel-knob";
-wheelKnob.style.position = "absolute";
-wheelKnob.style.left = "50%";
-wheelKnob.style.top = "50%";
-wheelKnob.style.width = ACTION_KNOB_SIZE + "px";
-wheelKnob.style.height = ACTION_KNOB_SIZE + "px";
-wheelKnob.style.borderRadius = "999px";
-wheelKnob.style.transform = "translate(-50%, -50%)";
-wheelKnob.style.background = "rgba(255,255,255,0.10)";
-wheelKnob.style.border = "2px solid rgba(255,255,255,0.16)";
-wheelKnob.style.boxSizing = "border-box";
-wheelKnob.style.pointerEvents = "none";
-wheelKnob.style.transition = "transform 0.05s linear, background 0.12s ease, border-color 0.12s ease";
+wheelKnob.style.cssText = `
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: ${WHEEL_KNOB_SIZE}px;
+  height: ${WHEEL_KNOB_SIZE}px;
+  margin-left: -${WHEEL_KNOB_SIZE / 2}px;
+  margin-top: -${WHEEL_KNOB_SIZE / 2}px;
+  border-radius: 999px;
+  background: rgba(255,255,255,0.10);
+  border: 1px solid rgba(255,255,255,0.16);
+  box-shadow: 0 1px 4px rgba(0,0,0,0.18);
+`;
 
-const btnInteract = makeBtn("");
+const btnInteract = document.createElement("div");
+btnInteract.className = "mc-action-btn";
+btnInteract.setAttribute("role", "button");
 btnInteract.setAttribute("aria-label", "Interact");
-btnInteract.style.position = "absolute";
-btnInteract.style.left = "50%";
-btnInteract.style.top = "50%";
-btnInteract.style.width = ACTION_INTERACT_SIZE + "px";
-btnInteract.style.height = ACTION_INTERACT_SIZE + "px";
-btnInteract.style.transform = "translate(-50%, -50%)";
-btnInteract.style.background = "rgba(255,255,255,0.08)";
-btnInteract.style.borderColor = "rgba(255,255,255,0.18)";
-btnInteract.style.color = "rgba(255,255,255,0.78)";
-btnInteract.style.zIndex = "2";
+btnInteract.style.cssText += `
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  width: 58px;
+  height: 58px;
+  background: rgba(255,255,255,0.06);
+  border: 1px solid rgba(255,255,255,0.14);
+  color: rgba(255,255,255,0.74);
+  z-index: 2;
+`;
 
-wheelPad.appendChild(wheelRing);
-wheelPad.appendChild(wheelKnob);
-actionWrap.appendChild(wheelPad);
+attackWheel.appendChild(wheelInner);
+attackWheel.appendChild(wheelKnob);
+actionWrap.appendChild(attackWheel);
 actionWrap.appendChild(btnInteract);
 
 function isMainMenuOpenDom() {
@@ -585,36 +591,19 @@ function isMainMenuOpenDom() {
   return !!(mm && mm.classList.contains("open"));
 }
 
-function isGameplayActuallyVisibleDom() {
-  const canvas = document.querySelector("canvas");
+function isGameplayVisible() {
+  const canvas = getCanvas();
   if (!canvas) return false;
-  const style = window.getComputedStyle ? window.getComputedStyle(canvas) : null;
-  if (style) {
-    if (style.visibility === "hidden" || style.display === "none") return false;
-  }
-  if (canvas.style && (canvas.style.visibility === "hidden" || canvas.style.display === "none")) return false;
-  return true;
-}
-
-function areTouchGameplayControlsBlocked() {
-  return isMainMenuOpenDom() || !isGameplayActuallyVisibleDom();
+  const cs = getComputedStyle(canvas);
+  return cs.display !== "none" && cs.visibility !== "hidden" && parseFloat(cs.opacity || "1") > 0;
 }
 
 function syncActionInteractivity() {
-  const blocked = areTouchGameplayControlsBlocked();
+  const blocked = isMainMenuOpenDom() || !isLandscapeNow() || !isGameplayVisible();
   actionWrap.style.pointerEvents = blocked ? "none" : "auto";
+  actionWrap.style.display = blocked ? "none" : "block";
 }
 
-function makeBtn(label, extraClass = "") {
-  const b = document.createElement("div");
-  b.className = `mc-action-btn ${extraClass}`.trim();
-  b.textContent = label;
-  b.setAttribute("role", "button");
-  b.setAttribute("aria-label", label || "attack");
-  return b;
-}
-
-// Keep the action cluster from blocking hamburger-menu clicks.
 try {
   const mm = document.getElementById("mainMenu");
   if (mm) {
@@ -622,10 +611,8 @@ try {
     mo.observe(mm, { attributes: true, attributeFilter: ["class", "style"] });
   }
 } catch (_) {}
-
-// Fallback (in case the menu is created later)
 setInterval(() => {
-  try { syncTouchGameplayAvailability(); } catch (_) {}
+  try { syncActionInteractivity(); } catch (_) {}
 }, 250);
 
 function getMyWorldPos() {
@@ -639,7 +626,7 @@ function getMyWorldPos() {
 }
 
 function doInteract() {
-  if (isMainMenuOpenDom()) return;
+  if (isMainMenuOpenDom() || !isGameplayVisible()) return;
   try {
     if (typeof window.isOnPortal === "function" && window.isOnPortal()) {
       if (typeof window.startPortalFade === "function") { window.startPortalFade(); return; }
@@ -661,34 +648,47 @@ function aimWorldFromDir(dx, dy) {
 
 let holdActive = false;
 let holdDir = null;
-let wheelPointerId = null;
+let wheelActive = false;
+const WHEEL_RADIUS = (WHEEL_SIZE / 2) - 18;
+
+function moveWheelKnob(dx, dy) {
+  const len = Math.hypot(dx, dy);
+  const max = WHEEL_RADIUS - (WHEEL_KNOB_SIZE / 2) - 4;
+  const s = len > max ? (max / len) : 1;
+  wheelKnob.style.transform = `translate(${dx * s}px, ${dy * s}px)`;
+}
 
 function resetWheelKnob() {
-  wheelKnob.style.transform = "translate(-50%, -50%)";
-  wheelKnob.style.background = "rgba(255,255,255,0.10)";
-  wheelKnob.style.borderColor = "rgba(255,255,255,0.16)";
+  wheelKnob.style.transform = "translate(0px, 0px)";
 }
 
 function startAttackDir(dx, dy) {
-  if (isMainMenuOpenDom()) return;
+  if (isMainMenuOpenDom() || !isGameplayVisible()) return;
   const aim = aimWorldFromDir(dx, dy);
   if (!aim) return;
-
   try {
     if (window.mainMenuOpen || window.inventoryOpen || window.skillsOpen || window.monsterBookOpen) return;
   } catch (_) {}
-
   if (ACTION_HOLD_REPEAT && typeof window.sendAttackHoldState === "function") {
-    if (!holdActive) {
-      holdActive = true;
-      window.sendAttackHoldState(true, aim.wx, aim.wy);
-    }
+    holdActive = true;
     holdDir = { dx, dy };
+    window.sendAttackHoldState(true, aim.wx, aim.wy);
   } else if (typeof window.sendAttackAtWorld === "function") {
     window.sendAttackAtWorld(aim.wx, aim.wy);
   } else if (typeof window.sendAttack === "function") {
     window.sendAttack();
   }
+}
+
+function updateAttackDir(dx, dy) {
+  if (!holdActive) return startAttackDir(dx, dy);
+  holdDir = { dx, dy };
+  const aim = aimWorldFromDir(dx, dy);
+  if (!aim) return;
+  try {
+    if (typeof window.sendAttackHoldAim === "function") window.sendAttackHoldAim(aim.wx, aim.wy);
+    else if (typeof window.sendAttackHoldState === "function") window.sendAttackHoldState(true, aim.wx, aim.wy);
+  } catch (_) {}
 }
 
 function stopAttackHold() {
@@ -713,8 +713,8 @@ setInterval(tickHoldAim, 80);
 
 function bindPress(el, onDown, onUp) {
   el.addEventListener("pointerdown", (e) => {
-    if (!isLandscapeNow()) return;
-    if (areTouchGameplayControlsBlocked()) return;
+    if (!isLandscapeNow() || !isGameplayVisible()) return;
+    if (isMainMenuOpenDom()) return;
     e.preventDefault();
     e.stopPropagation();
     onDown(e);
@@ -735,114 +735,80 @@ function bindPress(el, onDown, onUp) {
   }, { passive: false });
 }
 
-function updateWheelAimFromEvent(e) {
-  if (areTouchGameplayControlsBlocked()) return;
-  const rect = wheelPad.getBoundingClientRect();
+bindPress(btnInteract, () => doInteract());
+
+attackWheel.addEventListener("pointerdown", (e) => {
+  if (!isLandscapeNow() || !isGameplayVisible() || isMainMenuOpenDom()) return;
+  e.preventDefault();
+  e.stopPropagation();
+  wheelActive = true;
+  const rect = attackWheel.getBoundingClientRect();
   const cx = rect.left + rect.width / 2;
   const cy = rect.top + rect.height / 2;
   const dx = e.clientX - cx;
   const dy = e.clientY - cy;
-  const dist = Math.hypot(dx, dy);
-  const maxMove = (ACTION_WHEEL_SIZE - ACTION_KNOB_SIZE) / 2 - 10;
-
-  if (dist < ACTION_DEADZONE) {
-    wheelKnob.style.transform = "translate(-50%, -50%)";
-    if (holdActive) stopAttackHold();
-    return;
-  }
-
-  const angle = Math.atan2(dy, dx);
-  const clamped = Math.min(dist, maxMove);
-  const nx = Math.cos(angle) * clamped;
-  const ny = Math.sin(angle) * clamped;
-  wheelKnob.style.transform = `translate(calc(-50% + ${nx}px), calc(-50% + ${ny}px))`;
-  wheelKnob.style.background = "rgba(255,255,255,0.18)";
-  wheelKnob.style.borderColor = "rgba(255,255,255,0.26)";
-  startAttackDir(Math.cos(angle), Math.sin(angle));
-}
-
-bindPress(btnInteract, () => doInteract());
-
-wheelPad.addEventListener("pointerdown", (e) => {
-  if (!isLandscapeNow()) return;
-  if (areTouchGameplayControlsBlocked()) return;
-  e.preventDefault();
-  e.stopPropagation();
-  wheelPointerId = e.pointerId;
-  try { wheelPad.setPointerCapture(e.pointerId); } catch (_) {}
-  updateWheelAimFromEvent(e);
+  moveWheelKnob(dx, dy);
+  if (Math.hypot(dx, dy) >= WHEEL_DEADZONE) startAttackDir(dx, dy);
+  try { attackWheel.setPointerCapture(e.pointerId); } catch (_) {}
 }, { passive: false });
 
-wheelPad.addEventListener("pointermove", (e) => {
-  if (wheelPointerId !== e.pointerId) return;
+attackWheel.addEventListener("pointermove", (e) => {
+  if (!wheelActive) return;
   e.preventDefault();
   e.stopPropagation();
-  updateWheelAimFromEvent(e);
+  const rect = attackWheel.getBoundingClientRect();
+  const cx = rect.left + rect.width / 2;
+  const cy = rect.top + rect.height / 2;
+  const dx = e.clientX - cx;
+  const dy = e.clientY - cy;
+  moveWheelKnob(dx, dy);
+  if (Math.hypot(dx, dy) >= WHEEL_DEADZONE) updateAttackDir(dx, dy);
 }, { passive: false });
 
-function endWheelPointer(e) {
-  if (wheelPointerId !== null && e && wheelPointerId !== e.pointerId) return;
+function endWheel(e) {
+  if (!wheelActive) return;
   if (e) {
     e.preventDefault();
     e.stopPropagation();
-    try { wheelPad.releasePointerCapture(e.pointerId); } catch (_) {}
+    try { attackWheel.releasePointerCapture(e.pointerId); } catch (_) {}
   }
-  wheelPointerId = null;
+  wheelActive = false;
   resetWheelKnob();
   stopAttackHold();
 }
 
-wheelPad.addEventListener("pointerup", endWheelPointer, { passive: false });
-wheelPad.addEventListener("pointercancel", endWheelPointer, { passive: false });
-
-window.addEventListener("blur", () => { endWheelPointer(); stopAttackHold(); });
-document.addEventListener("visibilitychange", () => { if (document.hidden) { endWheelPointer(); stopAttackHold(); } });
+attackWheel.addEventListener("pointerup", endWheel, { passive: false });
+attackWheel.addEventListener("pointercancel", endWheel, { passive: false });
+window.addEventListener("blur", () => { endWheel(); stopAttackHold(); });
+document.addEventListener("visibilitychange", () => { if (document.hidden) { endWheel(); stopAttackHold(); } });
 
 function positionActionCluster() {
   const vp = getVP();
   const safe = getSafeInsets();
-
-  const clusterW = ACTION_WHEEL_SIZE;
-  const clusterH = ACTION_WHEEL_SIZE;
-
+  const clusterW = WHEEL_SIZE;
+  const clusterH = WHEEL_SIZE;
   const minTop = safe.top + 84;
   const maxTop = vp.h - safe.bottom - clusterH - 84;
-
   const top = Math.max(minTop, Math.min(Math.round(vp.h / 2 - clusterH / 2), maxTop));
-  const right = Math.round(safe.right + 12);
-
+  const right = Math.round(safe.right + 18);
   actionWrap.style.top = top + "px";
   actionWrap.style.right = right + "px";
+  syncActionInteractivity();
 }
 
   // ===== Orientation handling =====
-  function syncTouchGameplayAvailability() {
-    const landscape = isLandscapeNow();
-    const blocked = areTouchGameplayControlsBlocked();
-    if (!landscape || blocked) {
-      onEnd(undefined);
-      stopAttackHold();
-      touchZone.style.display = "none";
-      actionWrap.style.display = "none";
-    } else {
-      touchZone.style.display = "block";
-      actionWrap.style.display = "grid";
-      positionActionCluster();
-    }
-    syncActionInteractivity();
-  }
-
   function applyOrientationMode() {
     const landscape = isLandscapeNow();
     rotateOverlay.style.display = landscape ? "none" : "flex";
 
     if (!landscape) {
       onEnd(undefined);
-      stopAttackHold();
       touchZone.style.display = "none";
       actionWrap.style.display = "none";
     } else {
-      syncTouchGameplayAvailability();
+      touchZone.style.display = "block";
+      actionWrap.style.display = "grid";
+      positionActionCluster();
       resizeCanvasInternal();
       scheduleResizes();
       setTimeout(elevateHamburger, 0);
