@@ -631,15 +631,32 @@ function isTitleScreenOpenDom() {
   return !!(overlay && overlay.classList.contains("open"));
 }
 
+function isGameplayUiBlocked() {
+  try {
+    if (typeof window.isGameplayUiBlockingMobileControls === "function") {
+      return !!window.isGameplayUiBlockingMobileControls();
+    }
+  } catch (_) {}
+
+  try {
+    if (window.mainMenuOpen || window.inventoryOpen || window.skillsOpen || window.monsterBookOpen || window.editorOpen) {
+      return true;
+    }
+  } catch (_) {}
+
+  return isTitleScreenOpenDom() || isMainMenuOpenDom();
+}
+
 function syncTouchZoneInteractivity() {
-  const blocked = isTitleScreenOpenDom() || !isLandscapeNow() || !isGameplayVisible();
+  const blocked = isGameplayUiBlocked() || !isLandscapeNow() || !isGameplayVisible();
   if (blocked) onEnd(undefined);
   touchZone.style.pointerEvents = blocked ? "none" : "auto";
   touchZone.style.display = blocked ? "none" : "block";
 }
 
 function syncActionInteractivity() {
-  const blocked = isTitleScreenOpenDom() || isMainMenuOpenDom() || !isLandscapeNow() || !isGameplayVisible();
+  const blocked = isGameplayUiBlocked() || !isLandscapeNow() || !isGameplayVisible();
+  if (blocked) stopAttackHold();
   actionWrap.style.pointerEvents = blocked ? "none" : "auto";
   actionWrap.style.display = blocked ? "none" : "block";
 }
@@ -718,7 +735,7 @@ function resetWheelKnob() {
 }
 
 function startAttackDir(dx, dy) {
-  if (isMainMenuOpenDom() || !isGameplayVisible()) return;
+  if (isGameplayUiBlocked() || !isGameplayVisible()) return;
   const aim = aimWorldFromDir(dx, dy);
   if (!aim) return;
   try {
@@ -872,6 +889,10 @@ function positionActionCluster() {
 
   window.addEventListener("resize", applyOrientationMode, { passive: true });
   window.addEventListener("orientationchange", applyOrientationMode, { passive: true });
+  window.addEventListener("game-ui-state-change", () => {
+    syncTouchZoneInteractivity();
+    syncActionInteractivity();
+  }, { passive: true });
   if (window.visualViewport) {
     window.visualViewport.addEventListener("resize", applyOrientationMode, { passive: true });
   }

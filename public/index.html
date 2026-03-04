@@ -2962,6 +2962,7 @@ function setMainMenuOpen(open) {
   if (!mainMenu) mainMenu = document.getElementById("mainMenu");
   if (mainMenu) mainMenu.classList.toggle("open", mainMenuOpen);
   updateMenuBtnState();
+  notifyMobileUiStateChanged();
 }
 
 function toggleMainMenu() {
@@ -3046,6 +3047,20 @@ function updateInvBtnState() {
   invBtn.setAttribute("aria-expanded", inventoryOpen ? "true" : "false");
 }
 
+function notifyMobileUiStateChanged() {
+  try {
+    window.dispatchEvent(new CustomEvent("game-ui-state-change"));
+  } catch (_) {}
+}
+
+window.isGameplayUiBlockingMobileControls = function() {
+  try {
+    return !!(isTitleScreenOpen() || mainMenuOpen || inventoryOpen || skillsOpen || monsterBookOpen || editorOpen);
+  } catch (_) {
+    return false;
+  }
+};
+
 function guessWeaponTab() {
   const me = worldPlayers && worldPlayers[myId];
   const w = me?.equipment?.weapon ?? me?.weapon ?? null;
@@ -3081,6 +3096,7 @@ function toggleSkills() {
   }
 
   skillsDragging = false;
+  notifyMobileUiStateChanged();
 }
 
 
@@ -3108,6 +3124,7 @@ function toggleMonsterBook() {
     bookWinX = Math.floor(canvas.width / 2 - 560 / 2);
     bookWinY = Math.floor(canvas.height / 2 - 420 / 2);
   }
+  notifyMobileUiStateChanged();
 }
 
 
@@ -3132,6 +3149,8 @@ function toggleInventory() {
     invWinX = Math.floor(canvas.width / 2 - 180);
     invWinY = Math.floor(canvas.height / 2 - 180);
   }
+
+  notifyMobileUiStateChanged();
 
   if (!inventoryOpen) {
     invDragging = false;
