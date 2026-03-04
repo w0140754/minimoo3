@@ -73,6 +73,10 @@
       overscroll-behavior: none;
       touch-action: manipulation;
       background: #000;
+      user-select: none;
+      -webkit-user-select: none;
+      -webkit-touch-callout: none;
+      -webkit-tap-highlight-color: transparent;
     }
 
     /* Hide simple desktop text headers if present */
@@ -90,6 +94,10 @@
       box-sizing: border-box;
       padding: var(--mc-safe-top) var(--mc-safe-right) var(--mc-safe-bottom) var(--mc-safe-left);
       z-index: 0;
+      user-select: none;
+      -webkit-user-select: none;
+      -webkit-touch-callout: none;
+      -webkit-tap-highlight-color: transparent;
     }
 
     #c {
@@ -120,6 +128,10 @@
       z-index: 2147483000;
       touch-action: none;
       background: transparent;
+      user-select: none;
+      -webkit-user-select: none;
+      -webkit-touch-callout: none;
+      -webkit-tap-highlight-color: transparent;
     }
 
 
@@ -147,6 +159,22 @@
   color: rgba(255,255,255,0.70);
   -webkit-tap-highlight-color: transparent;
 }
+
+    #c,
+    .mc-touch-zone,
+    .mc-action-wrap,
+    .mc-action-btn,
+    .mc-hotkey-strip,
+    .mc-hotkey-btn,
+    .mc-hotkey-label,
+    .mc-rotate-overlay {
+      user-select: none;
+      -webkit-user-select: none;
+      -webkit-touch-callout: none;
+      -webkit-tap-highlight-color: transparent;
+      -webkit-user-drag: none;
+    }
+
 /* Very subtle by default (attack buttons) */
 .mc-action-btn.mc-ghost{
   background: rgba(255,255,255,0.02);
