@@ -3294,6 +3294,7 @@ let titleUi = null;
 let titleScreenState = "select";
 let selectedCharacterName = null;
 let pendingCharacterName = null;
+let pendingCharacterMode = null;
 let activeCharacterName = null;
 let suppressAutoJoin = false;
 
@@ -3418,6 +3419,7 @@ function updatePreviewForName(name) {
 
   const ctx2 = cvs.getContext("2d");
   ctx2.clearRect(0,0,cvs.width,cvs.height);
+  ctx2.imageSmoothingEnabled = false;
 
   if (connectBtn) {
     connectBtn.disabled = !name;
@@ -3439,20 +3441,87 @@ function updatePreviewForName(name) {
   metaEl.textContent = lvl ? `Level ${lvl}` : "Level 1";
 
   try {
-    const img = (typeof playerIdleSprite !== "undefined") ? playerIdleSprite : null;
-    if (img && img.complete && img.naturalWidth) {
-      ctx2.imageSmoothingEnabled = false;
-      const sw = 64, sh = 64;
-      const scale = 2.1;
-      const dw = sw * scale;
-      const dh = sh * scale;
-      const dx = (cvs.width - dw) / 2;
-      const dy = (cvs.height - dh) / 2 + 8;
-      ctx2.drawImage(img, 0, 0, sw, sh, dx, dy, dw, dh);
-    } else {
+    const bodyImg = (typeof playerIdleSprite !== "undefined") ? playerIdleSprite : null;
+    if (!(bodyImg && bodyImg.complete && bodyImg.naturalWidth)) {
       drawPreviewFallbackStick(ctx2, cvs);
+      return;
     }
-  } catch {}
+
+    const eq = (m && m.equipment && typeof m.equipment === "object") ? m.equipment : {};
+    const armorId = eq.armor || null;
+    const hatId = eq.hat || null;
+    const weaponId = eq.weapon || null;
+
+    const armorImg = (armorId && typeof armorIdleOverlays !== "undefined") ? armorIdleOverlays[armorId] : null;
+    const hatImg = hatId
+      ? ((typeof hatIdleOverlays !== "undefined") ? hatIdleOverlays[hatId] : null)
+      : ((typeof defaultHairIdleOverlays !== "undefined" && defaultHairIdleOverlays.default) ? defaultHairIdleOverlays.default : null);
+
+    const sw = 64, sh = 64;
+    const scale = 2.1;
+    const dw = sw * scale;
+    const dh = sh * scale;
+    const dx = (cvs.width - dw) / 2;
+    const dy = (cvs.height - dh) / 2 + 8;
+
+    const drawLayer = (img) => {
+      if (!img || !img.complete || !img.naturalWidth) return;
+      ctx2.drawImage(img, 0, 0, sw, sh, dx, dy, dw, dh);
+    };
+
+    function drawPreviewWeapon(img, kind) {
+      if (!img || !img.complete || !img.naturalWidth) return;
+
+      ctx2.save();
+      ctx2.imageSmoothingEnabled = false;
+
+      if (kind === "spear") {
+        const w = img.naturalWidth || 32;
+        const h = img.naturalHeight || 64;
+        const px = dx + dw * 0.42;
+        const py = dy + dh * 0.72;
+        ctx2.translate(px, py);
+        ctx2.rotate(Math.PI / 7);
+        ctx2.drawImage(img, -w * 0.42, -h * 0.82, w, h);
+      } else if (kind === "sword") {
+        const W = 32, H = 64;
+        const px = dx + dw * 0.43;
+        const py = dy + dh * 0.78;
+        ctx2.translate(px, py);
+        ctx2.rotate(Math.PI / 18);
+        ctx2.drawImage(img, 0, 0, img.naturalWidth, img.naturalHeight, -16, -52, W, H);
+      } else if (kind === "wand") {
+        const W = 32, H = 64;
+        const px = dx + dw * 0.43;
+        const py = dy + dh * 0.80;
+        ctx2.translate(px, py);
+        ctx2.rotate(Math.PI / 20);
+        ctx2.drawImage(img, 0, 0, img.naturalWidth, img.naturalHeight, -16, -52, W, H);
+      }
+
+      ctx2.restore();
+    }
+
+    let weaponImg = null;
+    let weaponKind = null;
+    if (weaponId && typeof spearSprites !== "undefined" && spearSprites[weaponId]) {
+      weaponImg = spearSprites[weaponId];
+      weaponKind = "spear";
+    } else if (weaponId && typeof swordSprites !== "undefined" && swordSprites[weaponId]) {
+      weaponImg = swordSprites[weaponId];
+      weaponKind = "sword";
+    } else if (weaponId && typeof wandSprites !== "undefined" && wandSprites[weaponId]) {
+      weaponImg = wandSprites[weaponId];
+      weaponKind = "wand";
+    }
+
+    drawPreviewWeapon(weaponImg, weaponKind);
+    drawLayer(bodyImg);
+    drawLayer(armorImg);
+    drawLayer(hatImg);
+  } catch {
+    drawPreviewFallbackStick(ctx2, cvs);
+  }
 }
 
 
@@ -3622,6 +3691,7 @@ function resetClientWorldForTitleScreen() {
 function disconnectCharacterSession() {
   activeCharacterName = null;
   pendingCharacterName = null;
+  pendingCharacterMode = null;
   nameSent = false;
   clearMovementKeysAndSend();
   if (ws) {
@@ -3638,29 +3708,50 @@ function disconnectCharacterSession() {
   resetClientWorldForTitleScreen();
 }
 
-function returnToCharacterSelect() {
+function finalizeReturnToCharacterSelect(preserveName = null) {
   suppressAutoJoin = true;
-  selectedCharacterName = null;
+  selectedCharacterName = preserveName || activeCharacterName || myName || null;
   closeAllOverlaysForCharacterMenu();
   disconnectCharacterSession();
+  if (selectedCharacterName) {
+    try { updatePreviewForName(selectedCharacterName); } catch {}
+  }
   openTitleScreen("select");
 }
 
-function beginCharacterSession(name) {
+function returnToCharacterSelect() {
+  const preserveName = activeCharacterName || myName || selectedCharacterName || null;
+  suppressAutoJoin = true;
+  selectedCharacterName = preserveName;
+  closeAllOverlaysForCharacterMenu();
+
+  if (ws && ws.readyState === 1 && preserveName) {
+    try {
+      ws.send(JSON.stringify({ type: "saveAndLogout" }));
+      return;
+    } catch {}
+  }
+
+  finalizeReturnToCharacterSelect(preserveName);
+}
+
+function beginCharacterSession(name, mode = "load") {
   const clean = normalizeCharacterName(name);
   if (!isValidCharacterName(clean)) {
     setTitleScreenError("Name must be letters only, 4-8 characters.");
     return;
   }
+  const joinMode = (mode === "create") ? "create" : "load";
   suppressAutoJoin = false;
   selectedCharacterName = clean;
   pendingCharacterName = clean;
+  pendingCharacterMode = joinMode;
   myName = clean;
   rememberCharacter(clean);
   setTitleScreenError("");
 
   if (ws && ws.readyState === 1) {
-    ws.send(JSON.stringify({ type: "setName", name: clean }));
+    ws.send(JSON.stringify({ type: "setName", name: clean, mode: joinMode }));
     nameSent = true;
     return;
   }
@@ -3687,13 +3778,13 @@ function submitCharacterCreate() {
   selectedCharacterName = clean;
   try { updatePreviewForName(clean); } catch {}
   setTitleScreenError("");
-  openTitleScreen("select");
+  beginCharacterSession(clean, "create");
 }
 
 function handleWsOpen() {
   const joinName = pendingCharacterName || (!suppressAutoJoin && myName && isValidCharacterName(myName) ? myName : null);
   if (joinName) {
-    ws.send(JSON.stringify({ type: "setName", name: joinName }));
+    ws.send(JSON.stringify({ type: "setName", name: joinName, mode: pendingCharacterMode || "load" }));
     nameSent = true;
     return;
   }
@@ -4354,18 +4445,37 @@ function handleWsMessage(e) {
   if (msg.type === "nameRejected") {
     nameSent = false;
     pendingCharacterName = null;
+    pendingCharacterMode = null;
     openTitleScreen(titleScreenState === "create" ? "create" : "select");
     setTitleScreenError(msg.reason || "That name was rejected by the server.");
     return;
   }
   if (msg.type === "nameAccepted") {
+    const acceptedMode = pendingCharacterMode || "load";
     myName = msg.name || myName;
+    activeCharacterName = myName || null;
     pendingCharacterName = null;
+    pendingCharacterMode = null;
     if (myName) rememberCharacter(myName);
+
+    if (acceptedMode === "create") {
+      suppressAutoJoin = true;
+      selectedCharacterName = myName || selectedCharacterName || null;
+      disconnectCharacterSession();
+      try { updatePreviewForName(selectedCharacterName || null); } catch {}
+      openTitleScreen("select");
+      return;
+    }
+
     closeTitleScreen();
     return;
   }
 
+  if (msg.type === "saveAndLogoutComplete") {
+    const savedName = msg.name || activeCharacterName || myName || selectedCharacterName || null;
+    finalizeReturnToCharacterSelect(savedName);
+    return;
+  }
 
   if (msg.type === "hotbarState") {
     hotbarSlots = sanitizeHotbarSlots(msg.slots);

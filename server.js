@@ -16,6 +16,31 @@ const { Pool } = pg;
 // ------------------------------
 let pool = null;
 let postgresHealthy = false;
+const localPlayerSaves = new Map();
+
+function cloneSavePayloadFromPlayer(p) {
+  if (!p?.name) return null;
+  return {
+    name: p.name,
+    level: p.level,
+    xp: p.xp,
+    xp_next: p.xpNext,
+    atk: p.atk,
+    speed: p.speed,
+    hp: p.hp,
+    max_hp: p.maxHp,
+    map_id: p.mapId,
+    x: p.x,
+    y: p.y,
+    gold: p.gold,
+    equipment: JSON.parse(JSON.stringify(p.equipment || { weapon: null, armor: null, hat: null, accessory: null })),
+    inventory: JSON.parse(JSON.stringify(p.inventory || createDefaultInventory())),
+    quests: JSON.parse(JSON.stringify(p.quests || {})),
+    hotbar: JSON.parse(JSON.stringify(Array.isArray(p.hotbar) ? p.hotbar : new Array(6).fill(null))),
+    monster_book: JSON.parse(JSON.stringify(p.monsterBook || {})),
+    updated_at: new Date().toISOString(),
+  };
+}
 
 if (process.env.DATABASE_URL) {
   pool = new Pool({
@@ -99,20 +124,26 @@ async function ensurePostgresSchema() {
 
 
 async function dbLoadPlayerByName(name) {
-  if (!pool || !postgresHealthy) return null;
+  const fallbackKey = (name || "").toString().trim().toLowerCase();
+  if (!pool || !postgresHealthy) return fallbackKey ? (localPlayerSaves.get(fallbackKey) || null) : null;
   try {
-    const { rows } = await pool.query("select * from players where name = $1", [name]);
-    return rows[0] || null;
+    const { rows } = await pool.query("select * from players where lower(name) = lower($1) order by updated_at desc limit 1", [name]);
+    if (rows[0]) return rows[0];
+    return fallbackKey ? (localPlayerSaves.get(fallbackKey) || null) : null;
   } catch (err) {
-    console.error("⚠️ Postgres load failed; running without persistence:", err?.message || err);
+    console.error("⚠️ Postgres load failed; falling back to local memory save:", err?.message || err);
     postgresHealthy = false;
-    return null;
+    return fallbackKey ? (localPlayerSaves.get(fallbackKey) || null) : null;
   }
 }
 
 async function dbSavePlayer(p) {
-  if (!pool || !postgresHealthy) return;
   if (!p?.name) return;
+
+  const fallbackKey = p.name.toString().trim().toLowerCase();
+  if (fallbackKey) localPlayerSaves.set(fallbackKey, cloneSavePayloadFromPlayer(p));
+
+  if (!pool || !postgresHealthy) return;
 
   try {
     await pool.query(
@@ -161,7 +192,7 @@ async function dbSavePlayer(p) {
       ]
     );
   } catch (err) {
-    console.error("⚠️ Postgres save failed; running without persistence:", err?.message || err);
+    console.error("⚠️ Postgres save failed; continuing with local memory save:", err?.message || err);
     postgresHealthy = false;
   }
 }
@@ -2096,6 +2127,8 @@ quests: { jangoon_red_duke: { started: false,
     monsterBook: {},
 kills: 0, completed: false, rewarded: false } },
 
+    // persistence bookkeeping
+    lastPersistAt: 0,
 
 // skills (server authoritative timers)
 skill1ActiveUntilMs: 0,
@@ -2186,13 +2219,15 @@ ws.on("message", async (buf) => {
 		return;
 	  }
 
-	  p.name = raw;
+	  p.name = existingRow?.name || raw;
 
 	  if (existingRow) {
 		console.log(`🔁 Loaded player from DB: ${p.name}`);
 		applyRowToPlayer(p, existingRow);
+		p.lastPersistAt = Date.now();
 	  } else {
 		console.log(`🆕 New player: ${p.name}`);
+		p.lastPersistAt = Date.now();
 		// Brand new character: always start on Map C at tile (16,5)
 		applyFixedSpawn(p);
 		p.save = null; // don't override fixed respawn with an old save
@@ -2205,6 +2240,20 @@ ws.on("message", async (buf) => {
 	  send(ws, { type: "hotbarState", slots: p.hotbar || new Array(6).fill(null) });
 	  return;
 	}
+
+    if (msg.type === "saveAndLogout") {
+      try {
+        if (p.name) {
+          await dbSavePlayer(p);
+          p.lastPersistAt = Date.now();
+        }
+        send(ws, { type: "saveAndLogoutComplete", name: p.name || null });
+      } catch (err) {
+        console.error("⚠️ saveAndLogout failed:", err?.message || err);
+        send(ws, { type: "saveAndLogoutComplete", name: p.name || null });
+      }
+      return;
+    }
 
     if (msg.type === "setHotbar") {
       const inSlots = Array.isArray(msg.slots) ? msg.slots : [];
@@ -3541,6 +3590,15 @@ function tickStep(dt) {
       if (p.hp <= 0) continue;
 
       const nowMs = Date.now();
+
+      // Periodic autosave so progress survives refreshes / reconnect hiccups,
+      // not just clean socket closes.
+      if (p.name && (!p.lastPersistAt || (nowMs - p.lastPersistAt) >= 10000)) {
+        dbSavePlayer(p).catch((err) => {
+          console.error("⚠️ Autosave failed:", err?.message || err);
+        });
+        p.lastPersistAt = nowMs;
+      }
 
       // Hold-to-attack: if the player is holding the mouse button down,
       // keep attempting basic attacks as soon as cooldown/lock allow.
