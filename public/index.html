@@ -3747,7 +3747,6 @@ function beginCharacterSession(name, mode = "load") {
   pendingCharacterName = clean;
   pendingCharacterMode = joinMode;
   myName = clean;
-  rememberCharacter(clean);
   setTitleScreenError("");
 
   if (ws && ws.readyState === 1) {
@@ -3774,7 +3773,6 @@ function submitCharacterCreate() {
     ui.input?.select?.();
     return;
   }
-  rememberCharacter(clean);
   selectedCharacterName = clean;
   try { updatePreviewForName(clean); } catch {}
   setTitleScreenError("");

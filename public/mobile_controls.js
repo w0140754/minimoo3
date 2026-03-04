@@ -115,7 +115,7 @@
       position: fixed;
       left: 0;
       top: 0;
-      width: 30vw;
+      width: 40vw;
       height: 100vh;
       z-index: 2147483000;
       touch-action: none;
@@ -598,8 +598,20 @@ function isGameplayVisible() {
   return cs.display !== "none" && cs.visibility !== "hidden" && parseFloat(cs.opacity || "1") > 0;
 }
 
+function isTitleScreenOpenDom() {
+  const overlay = document.getElementById("titleScreenOverlay");
+  return !!(overlay && overlay.classList.contains("open"));
+}
+
+function syncTouchZoneInteractivity() {
+  const blocked = isTitleScreenOpenDom() || !isLandscapeNow() || !isGameplayVisible();
+  if (blocked) onEnd(undefined);
+  touchZone.style.pointerEvents = blocked ? "none" : "auto";
+  touchZone.style.display = blocked ? "none" : "block";
+}
+
 function syncActionInteractivity() {
-  const blocked = isMainMenuOpenDom() || !isLandscapeNow() || !isGameplayVisible();
+  const blocked = isTitleScreenOpenDom() || isMainMenuOpenDom() || !isLandscapeNow() || !isGameplayVisible();
   actionWrap.style.pointerEvents = blocked ? "none" : "auto";
   actionWrap.style.display = blocked ? "none" : "block";
 }
@@ -607,12 +619,27 @@ function syncActionInteractivity() {
 try {
   const mm = document.getElementById("mainMenu");
   if (mm) {
-    const mo = new MutationObserver(() => syncActionInteractivity());
+    const mo = new MutationObserver(() => {
+      syncTouchZoneInteractivity();
+      syncActionInteractivity();
+    });
     mo.observe(mm, { attributes: true, attributeFilter: ["class", "style"] });
+  }
+
+  const titleOverlay = document.getElementById("titleScreenOverlay");
+  if (titleOverlay) {
+    const mo2 = new MutationObserver(() => {
+      syncTouchZoneInteractivity();
+      syncActionInteractivity();
+    });
+    mo2.observe(titleOverlay, { attributes: true, attributeFilter: ["class", "style"] });
   }
 } catch (_) {}
 setInterval(() => {
-  try { syncActionInteractivity(); } catch (_) {}
+  try {
+    syncTouchZoneInteractivity();
+    syncActionInteractivity();
+  } catch (_) {}
 }, 250);
 
 function getMyWorldPos() {
@@ -806,8 +833,8 @@ function positionActionCluster() {
       touchZone.style.display = "none";
       actionWrap.style.display = "none";
     } else {
-      touchZone.style.display = "block";
-      actionWrap.style.display = "grid";
+      syncTouchZoneInteractivity();
+      syncActionInteractivity();
       positionActionCluster();
       resizeCanvasInternal();
       scheduleResizes();
