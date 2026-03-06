@@ -108,6 +108,51 @@
 }
 .editor-panel.hidden{display:none;}
 .editor-panel h2{margin:6px 0 8px; font-size:14px; font-weight:700;}
+
+.editor-map-manager{
+  margin-bottom: 10px;
+  padding: 10px;
+  border-radius: 12px;
+  background: rgba(255,255,255,0.05);
+  border: 1px solid rgba(255,255,255,0.12);
+}
+.editor-section-title{font-size:12px; font-weight:700; opacity:0.9; margin:0 0 8px;}
+.editor-map-list{
+  display:flex;
+  flex-direction:column;
+  gap:6px;
+  max-height:180px;
+  overflow:auto;
+}
+.editor-map-item{
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  gap:8px;
+  padding:8px 10px;
+  border-radius:10px;
+  background: rgba(255,255,255,0.05);
+  border:1px solid rgba(255,255,255,0.10);
+}
+.editor-map-item.active{border-color: rgba(255,255,255,0.38); background: rgba(255,255,255,0.10);}
+.editor-map-name{font-size:12px; font-weight:700;}
+.editor-map-actions{display:flex; gap:6px;}
+.editor-map-btn,
+.editor-mini-btn{
+  background: rgba(255,255,255,0.08);
+  border: 1px solid rgba(255,255,255,0.14);
+  color:#fff;
+  border-radius: 9px;
+  padding: 6px 9px;
+  cursor:pointer;
+  font-size: 12px;
+}
+.editor-map-btn:hover,
+.editor-mini-btn:hover{background: rgba(255,255,255,0.12);}
+.editor-map-create{margin-top:10px; display:grid; gap:8px;}
+.editor-map-create-grid{display:grid; grid-template-columns: 1fr 72px 72px; gap:8px;}
+.editor-map-create input[type="number"]{width:100%;}
+
 .editor-row{display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-bottom:8px;}
 .editor-row button, .editor-row select{
   background: rgba(255,255,255,0.08);
@@ -164,6 +209,14 @@
   background: rgba(0,0,0,0.28);
 }
 .editor-mobprops.hidden{display:none;}
+.editor-portalprops{margin-top:10px; display:grid; gap:10px; padding:10px; border:1px solid rgba(255,255,255,0.10); border-radius:12px; background:rgba(255,255,255,0.03);}
+.editor-portalprops.hidden{display:none;}
+.editor-portal-grid{display:grid; grid-template-columns: repeat(2, minmax(0,1fr)); gap:8px;}
+.editor-portal-grid label{display:grid; gap:4px; font-size:12px; opacity:0.92;}
+.editor-portal-grid input{width:100%;}
+.editor-portal-row{display:flex; gap:8px; align-items:center; flex-wrap:wrap;}
+.editor-portal-row input[type="checkbox"]{width:auto;}
+.editor-portal-hint{font-size:12px; opacity:0.8; line-height:1.35;}
 .mobprops-title{font-size:12px; font-weight:800; margin-bottom:6px; opacity:0.95;}
 .mobprops-hint{font-size:12px; opacity:0.75; margin-bottom:10px; line-height:1.3;}
 .mobprops-grid{display:grid; grid-template-columns: 1fr; gap:8px;}
@@ -297,6 +350,26 @@
 <meta content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no" name="viewport"/><meta content="#000000" name="theme-color"/><meta content="yes" name="apple-mobile-web-app-capable"/><meta content="black-translucent" name="apple-mobile-web-app-status-bar-style"/><meta content="Mini MMO" name="apple-mobile-web-app-title"/><link href="/manifest.webmanifest" rel="manifest"/><link href="/icons/icon-180.png" rel="apple-touch-icon"/></head>
 <body>
 <div class="app-layout" id="appLayout">
+
+    <div class="editor-panel hidden" id="editorMapSidebar" aria-label="Map manager panel">
+      <h2>Maps</h2>
+      <div class="editor-map-manager" id="editorMapManager">
+        <div class="editor-section-title">Load or create a map</div>
+        <div class="editor-map-list" id="editorMapList"></div>
+        <div class="editor-map-create">
+          <input id="editorNewMapId" type="text" maxlength="32" placeholder="New map id (e.g. F or forest_01)" />
+          <div class="editor-map-create-grid">
+            <input id="editorNewMapWidth" type="number" min="1" max="256" value="18" placeholder="Width" />
+            <input id="editorNewMapHeight" type="number" min="1" max="256" value="12" placeholder="Height" />
+            <button type="button" class="editor-map-btn" id="editorCreateMapBtn">New Map</button>
+          </div>
+        </div>
+        <div class="editor-row" style="margin-top:10px">
+          <button type="button" id="editorExportBtn" title="Save current map to /maps/&lt;id&gt;.json">Save Map</button>
+          <button type="button" id="editorReturnLiveBtn" title="Return from local preview mode to the live game map">Return to Live Map</button>
+        </div>
+      </div>
+    </div>
 <div class="game-wrap" id="gameWrap">
 <button aria-expanded="false" aria-label="Open inventory (I)" class="hud-btn" id="invBtn" type="button">☰</button>
 <div aria-label="Game menu" class="main-menu" id="mainMenu" role="menu">
@@ -335,13 +408,12 @@
 </div>
 
     </div>
-    <div class="editor-panel hidden" id="editorPanel" aria-label="Map editor panel">
+<div class="editor-panel hidden" id="editorPanel" aria-label="Map editor panel">
       <h2>Map Editor</h2>
       <div class="editor-row">
         <button type="button" id="editorLayerBtn">Layer: GROUND</button>
         <button type="button" id="editorGridBtn">Grid: ON</button>
         <button type="button" id="editorCollBtn">Coll: ON</button>
-        <button type="button" id="editorExportBtn" title="Ctrl+E">Export</button>
       </div>
       <div class="editor-row">
         <input id="editorSearch" type="text" placeholder="Filter by tile # (e.g., 12) — tags later" />
@@ -402,6 +474,35 @@
         <div class="mobprops-actions">
           <button type="button" id="mobPropApplyDefaults">Defaults</button>
           <button type="button" id="mobPropDelete">Delete</button>
+        </div>
+      </div>
+      <div class="editor-portalprops hidden" id="editorPortalProps" aria-label="Portal properties">
+        <div class="editor-section-title">Portal</div>
+        <div class="editor-portal-hint" id="editorPortalHint">Switch to the Portal layer, then click a tile to create or select a portal.</div>
+        <div class="editor-portal-grid">
+          <label>Source X
+            <input id="portalPropX" type="number" min="0" step="1" />
+          </label>
+          <label>Source Y
+            <input id="portalPropY" type="number" min="0" step="1" />
+          </label>
+          <label>To Map
+            <input id="portalPropTo" type="text" maxlength="64" placeholder="A" />
+          </label>
+          <label>Dest X
+            <input id="portalPropToX" type="number" min="0" step="1" placeholder="optional" />
+          </label>
+          <label>Dest Y
+            <input id="portalPropToY" type="number" min="0" step="1" placeholder="optional" />
+          </label>
+          <label style="align-content:end;">
+            <span>Hidden</span>
+            <span class="editor-portal-row"><input id="portalPropHidden" type="checkbox" /> <span>Only reveal when standing on it</span></span>
+          </label>
+        </div>
+        <div class="editor-portal-row">
+          <button type="button" id="portalPropSave">Save Portal</button>
+          <button type="button" id="portalPropDelete">Delete Portal</button>
         </div>
       </div>
     </div>
@@ -1466,8 +1567,8 @@ let skillsTab = "wand";
    Ctrl+E: export current map+objects to clipboard/console
 ====================== */
 let editorOpen = false;
-let editorLayer = "ground"; // "ground" | "object" | "height" | "zgate" | "mobs"
-const EDITOR_LAYERS = ["ground","object","height","zgate","mobs"];
+let editorLayer = "ground"; // "ground" | "object" | "height" | "zgate" | "portals" | "mobs"
+const EDITOR_LAYERS = ["ground","object","height","zgate","portals","mobs"];
 function editorNextLayer() {
   const i = Math.max(0, EDITOR_LAYERS.indexOf(editorLayer));
   editorLayer = EDITOR_LAYERS[(i + 1) % EDITOR_LAYERS.length];
@@ -1745,6 +1846,7 @@ function editorAllowedList() {
   if (editorLayer === "height") return [0,1,2,3];
   if (editorLayer === "zgate") return [0,1];
   if (editorLayer === "mobs") return EDIT_MOB_TYPES;
+  if (editorLayer === "portals") return [];
   return EDIT_GROUND_TILES;
 }
 function editorSelectedTile() {
@@ -1761,11 +1863,319 @@ function editorSetTileIndexByValue(v) {
 // Editor DOM Panel (off-canvas UI)
 // ======================
 let editorDomReady = false;
+let editorMapList = [];
+let editorStandaloneMapId = null;
+let editorPanDragging = false;
+let editorPanLastX = 0;
+let editorPanLastY = 0;
+let editorSelectedPortal = null; // { x, y } on the currently edited map
+
+function editorNormalizePortal(raw, fallbackX = 0, fallbackY = 0) {
+  const x = Number.isFinite(Number(raw?.x)) ? Math.max(0, Number(raw.x) | 0) : (fallbackX | 0);
+  const y = Number.isFinite(Number(raw?.y)) ? Math.max(0, Number(raw.y) | 0) : (fallbackY | 0);
+  const out = (raw && typeof raw === 'object') ? { ...raw } : {};
+  out.x = x;
+  out.y = y;
+  out.to = String(raw?.to ?? '').trim();
+  if (raw && raw.toX !== '' && raw.toX != null && Number.isFinite(Number(raw.toX))) out.toX = Math.max(0, Number(raw.toX) | 0);
+  else delete out.toX;
+  if (raw && raw.toY !== '' && raw.toY != null && Number.isFinite(Number(raw.toY))) out.toY = Math.max(0, Number(raw.toY) | 0);
+  else delete out.toY;
+  if (raw && raw.hidden) out.hidden = true;
+  else delete out.hidden;
+  return out;
+}
+
+function editorGetPortalIndexAt(tx, ty) {
+  if (!Array.isArray(portals)) return -1;
+  return portals.findIndex(p => p && (p.x | 0) === (tx | 0) && (p.y | 0) === (ty | 0));
+}
+
+function editorGetSelectedPortal() {
+  if (!editorSelectedPortal) return null;
+  const idx = editorGetPortalIndexAt(editorSelectedPortal.x, editorSelectedPortal.y);
+  if (idx === -1) return null;
+  return portals[idx] || null;
+}
+
+function editorSelectPortalAt(tx, ty, createIfMissing = false) {
+  if (!Array.isArray(portals)) portals = [];
+  let idx = editorGetPortalIndexAt(tx, ty);
+  if (idx === -1 && createIfMissing) {
+    portals.push(editorNormalizePortal({ x: tx, y: ty, to: '' }, tx, ty));
+    idx = portals.length - 1;
+  }
+  editorSelectedPortal = (idx !== -1) ? { x: tx | 0, y: ty | 0 } : null;
+  editorUpdatePortalPanel();
+  editorUpdateDomStatus();
+  return idx;
+}
+
+function editorDeletePortalAt(tx, ty) {
+  const idx = editorGetPortalIndexAt(tx, ty);
+  if (idx === -1) return false;
+  portals.splice(idx, 1);
+  if (editorSelectedPortal && (editorSelectedPortal.x | 0) === (tx | 0) && (editorSelectedPortal.y | 0) === (ty | 0)) editorSelectedPortal = null;
+  editorUpdatePortalPanel();
+  editorUpdateDomStatus();
+  return true;
+}
+
+function editorPortalSummary(p) {
+  if (!p) return 'No portal selected.';
+  const bits = [`Source: (${p.x|0},${p.y|0})`, `To: ${p.to || '—'}`];
+  if (Number.isFinite(Number(p.toX)) && Number.isFinite(Number(p.toY))) bits.push(`Dest: (${Number(p.toX)|0},${Number(p.toY)|0})`);
+  if (p.hidden) bits.push('Hidden');
+  return bits.join(' • ');
+}
+
+function editorUpdatePortalPanel() {
+  const box = document.getElementById('editorPortalProps');
+  if (!box) return;
+  box.classList.toggle('hidden', editorLayer !== 'portals');
+  const hint = document.getElementById('editorPortalHint');
+  const p = editorGetSelectedPortal();
+  const setVal = (id, val) => { const el = document.getElementById(id); if (el) el.value = val; };
+  const setChecked = (id, val) => { const el = document.getElementById(id); if (el) el.checked = !!val; };
+  if (!p) {
+    setVal('portalPropX', ''); setVal('portalPropY', ''); setVal('portalPropTo', ''); setVal('portalPropToX', ''); setVal('portalPropToY', ''); setChecked('portalPropHidden', false);
+    if (hint) hint.textContent = 'Switch to the Portal layer, then click a tile to create or select a portal.';
+  } else {
+    setVal('portalPropX', p.x ?? ''); setVal('portalPropY', p.y ?? ''); setVal('portalPropTo', p.to ?? '');
+    setVal('portalPropToX', p.toX ?? ''); setVal('portalPropToY', p.toY ?? ''); setChecked('portalPropHidden', !!p.hidden);
+    if (hint) hint.textContent = editorPortalSummary(p);
+  }
+  const delBtn = document.getElementById('portalPropDelete');
+  if (delBtn) delBtn.disabled = !p;
+}
+
+function editorApplyPortalFromInputs() {
+  const p = editorGetSelectedPortal();
+  if (!p) return false;
+  const readNum = (id) => { const el = document.getElementById(id); const v = String(el?.value ?? '').trim(); return v === '' ? null : Number(v); };
+  const xRaw = readNum('portalPropX');
+  const yRaw = readNum('portalPropY');
+  const nextX = Number.isInteger(xRaw) ? Math.max(0, xRaw | 0) : (p.x | 0);
+  const nextY = Number.isInteger(yRaw) ? Math.max(0, yRaw | 0) : (p.y | 0);
+  const existingIdx = editorGetPortalIndexAt(nextX, nextY);
+  const currentIdx = editorGetPortalIndexAt(p.x, p.y);
+  if (existingIdx !== -1 && existingIdx !== currentIdx) {
+    levelToastText = `Portal already exists at (${nextX},${nextY})`;
+    levelToastUntilMs = performance.now() + 2400;
+    editorUpdatePortalPanel();
+    return false;
+  }
+  p.x = nextX; p.y = nextY;
+  p.to = String(document.getElementById('portalPropTo')?.value || '').trim();
+  const toX = readNum('portalPropToX');
+  const toY = readNum('portalPropToY');
+  if (Number.isInteger(toX)) p.toX = Math.max(0, toX | 0); else delete p.toX;
+  if (Number.isInteger(toY)) p.toY = Math.max(0, toY | 0); else delete p.toY;
+  if (document.getElementById('portalPropHidden')?.checked) p.hidden = true; else delete p.hidden;
+  editorSelectedPortal = { x: p.x | 0, y: p.y | 0 };
+  editorUpdatePortalPanel();
+  editorUpdateDomStatus();
+  return true;
+}
+
+function editorClampCamera() {
+  const world = getWorldSize();
+  camX = clamp(Math.round(camX), 0, Math.max(0, world.w - canvas.width));
+  camY = clamp(Math.round(camY), 0, Math.max(0, world.h - canvas.height));
+}
+
+function editorPanCamera(dx, dy) {
+  if (!map) return;
+  camX += dx;
+  camY += dy;
+  editorClampCamera();
+  editorUpdateDomStatus();
+}
+
+function editorRefreshLiveModeUi() {
+  const btn = document.getElementById("editorReturnLiveBtn");
+  if (!btn) return;
+  const inStandalone = !!editorStandaloneMapId;
+  btn.disabled = !inStandalone;
+  btn.textContent = inStandalone ? `Return to Live Map (${editorStandaloneMapId})` : 'Return to Live Map';
+}
+
+function editorReturnToLiveMap() {
+  if (!editorStandaloneMapId) {
+    levelToastText = 'Already on live map';
+    levelToastUntilMs = performance.now() + 1800;
+    editorRefreshLiveModeUi();
+    return;
+  }
+  const prevId = editorStandaloneMapId;
+  editorStandaloneMapId = null;
+  editorRenderMapList();
+  editorRefreshLiveModeUi();
+  editorUpdateDomStatus();
+  editorUpdateMobPropsPanel();
+  editorSelectedPortal = null;
+  editorUpdatePortalPanel();
+  levelToastText = `Returned to live map view from ${prevId}. Waiting for next snapshot…`;
+  levelToastUntilMs = performance.now() + 2600;
+}
+
+function editorMapSort(a, b) {
+  return String(a).localeCompare(String(b), undefined, { numeric: true, sensitivity: "base" });
+}
+
+function editorGetActiveMapId() {
+  return editorStandaloneMapId ? String(editorStandaloneMapId) : "";
+}
+
+function editorBuildBlankMapJson(id, w, h) {
+  const makeGrid = (fill = 0) => Array.from({ length: h }, () => Array(w).fill(fill));
+  return { id: String(id), w, h, map: makeGrid(0), obj: makeGrid(0), z: makeGrid(0), zGate: makeGrid(0), portals: [], npcs: [], mobSpawns: [] };
+}
+
+function editorApplyLoadedMapJson(data) {
+  if (!data || typeof data !== "object") throw new Error("Invalid map JSON.");
+  const id = String(data.id || "").trim();
+  const w = Number(data.w);
+  const h = Number(data.h);
+  if (!id) throw new Error("Map is missing an id.");
+  if (!Number.isInteger(w) || !Number.isInteger(h) || w <= 0 || h <= 0) throw new Error("Map has invalid dimensions.");
+
+  const cloneGrid = (src) => Array.isArray(src) ? src.map(row => Array.isArray(row) ? row.map(v => Number(v) || 0) : Array(w).fill(0)) : Array.from({ length: h }, () => Array(w).fill(0));
+  map = cloneGrid(data.map);
+  objMap = cloneGrid(data.obj);
+  zMap = cloneGrid(data.z);
+  zGateMap = cloneGrid(data.zGate);
+  portals = Array.isArray(data.portals) ? JSON.parse(JSON.stringify(data.portals)) : [];
+  currentMapId = id;
+  currentMap = { id, mobSpawns: Array.isArray(data.mobSpawns) ? JSON.parse(JSON.stringify(data.mobSpawns)) : [] };
+  seedEditorMobSpawns(id, currentMap.mobSpawns);
+  editorStandaloneMapId = id;
+  worldPlayers = {};
+  worldNpcs = {};
+  worldMobs = {};
+  worldDrops = {};
+  worldProjectiles = {};
+  whirlpools = [];
+  editorSelectedMobSpawn = null;
+  editorSelectedPortal = null;
+  camX = 0;
+  camY = 0;
+  editorRenderMapList();
+  editorRefreshLiveModeUi();
+  editorUpdateDomStatus();
+  editorUpdateMobPropsPanel();
+}
+
+async function editorFetchMapList() {
+  try {
+    const resp = await fetch('/api/maps', { cache: 'no-store' });
+    const data = await resp.json();
+    if (!resp.ok) throw new Error(data?.error || `HTTP ${resp.status}`);
+    editorMapList = Array.isArray(data?.maps) ? data.maps.map(m => String(m?.id || '')).filter(Boolean).sort(editorMapSort) : [];
+    editorRenderMapList();
+  } catch (err) {
+    console.warn('Failed to load map list:', err);
+    const list = document.getElementById('editorMapList');
+    if (list) list.innerHTML = `<div class="editor-meta">Couldn't load map list: ${String(err?.message || 'Unknown error')}</div>`;
+  }
+}
+
+function editorRenderMapList() {
+  const listEl = document.getElementById('editorMapList');
+  if (!listEl) return;
+  const activeId = editorGetActiveMapId();
+  listEl.innerHTML = '';
+  if (!editorMapList.length) {
+    listEl.innerHTML = '<div class="editor-meta">No map JSON files found yet.</div>';
+    return;
+  }
+  for (const id of editorMapList) {
+    const row = document.createElement('div');
+    row.className = 'editor-map-item' + (id === activeId ? ' active' : '');
+    const name = document.createElement('div');
+    name.className = 'editor-map-name';
+    name.textContent = id;
+    const actions = document.createElement('div');
+    actions.className = 'editor-map-actions';
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'editor-mini-btn';
+    btn.textContent = id === activeId ? 'Loaded' : 'Load';
+    btn.disabled = id === activeId;
+    btn.addEventListener('click', () => editorLoadMapFromServer(id));
+    actions.appendChild(btn);
+    row.appendChild(name);
+    row.appendChild(actions);
+    listEl.appendChild(row);
+  }
+}
+
+async function editorLoadMapFromServer(mapId) {
+  try {
+    const resp = await fetch(`/api/maps/${encodeURIComponent(mapId)}`, { cache: 'no-store' });
+    const data = await resp.json();
+    if (!resp.ok) throw new Error(data?.error || `HTTP ${resp.status}`);
+    editorApplyLoadedMapJson(data);
+    levelToastText = `Loaded ${mapId}.json`;
+    levelToastUntilMs = performance.now() + 2200;
+  } catch (err) {
+    console.warn('Failed to load map:', err);
+    levelToastText = `Load failed: ${err?.message || 'Unknown error'}`;
+    levelToastUntilMs = performance.now() + 3200;
+  }
+}
+
+async function editorCreateNewMapFromInputs() {
+  const idEl = document.getElementById('editorNewMapId');
+  const wEl = document.getElementById('editorNewMapWidth');
+  const hEl = document.getElementById('editorNewMapHeight');
+  const id = String(idEl?.value || '').trim();
+  const w = Number(wEl?.value || 0);
+  const h = Number(hEl?.value || 0);
+  if (!/^[A-Za-z0-9_-]+$/.test(id)) {
+    levelToastText = 'New map id must use letters, numbers, _ or -';
+    levelToastUntilMs = performance.now() + 2800;
+    return;
+  }
+  if (!Number.isInteger(w) || !Number.isInteger(h) || w <= 0 || h <= 0) {
+    levelToastText = 'Width and height must be positive integers';
+    levelToastUntilMs = performance.now() + 2800;
+    return;
+  }
+  if (editorMapList.includes(id)) {
+    levelToastText = `${id}.json already exists`;
+    levelToastUntilMs = performance.now() + 2800;
+    return;
+  }
+  try {
+    const payload = editorBuildBlankMapJson(id, w, h);
+    const resp = await fetch(`/api/maps/${encodeURIComponent(id)}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    const data = await resp.json().catch(() => null);
+    if (!resp.ok) throw new Error(data?.error || `HTTP ${resp.status}`);
+    if (!editorMapList.includes(id)) editorMapList.push(id);
+    editorMapList.sort(editorMapSort);
+    editorApplyLoadedMapJson(payload);
+    editorRenderMapList();
+    if (idEl) idEl.value = '';
+    levelToastText = `Created ${id}.json`;
+    levelToastUntilMs = performance.now() + 2500;
+  } catch (err) {
+    console.warn('Failed to create map:', err);
+    levelToastText = `Create failed: ${err?.message || 'Unknown error'}`;
+    levelToastUntilMs = performance.now() + 3200;
+  }
+}
+
 
 function setEditorPanelVisible(v){
   const p = document.getElementById("editorPanel");
-  if (!p) return;
-  p.classList.toggle("hidden", !v);
+  const m = document.getElementById("editorMapSidebar");
+  if (p) p.classList.toggle("hidden", !v);
+  if (m) m.classList.toggle("hidden", !v);
 }
 
 function editorUpdateDomHeader(){
@@ -1782,6 +2192,8 @@ function editorUpdateDomHeader(){
     if (editorLayer === "mobs") mobBox.classList.remove("hidden");
     else mobBox.classList.add("hidden");
   }
+  const portalBox = document.getElementById("editorPortalProps");
+  if (portalBox) portalBox.classList.toggle("hidden", editorLayer !== "portals");
 }
 
 function editorUpdateDomStatus(){
@@ -1801,7 +2213,10 @@ function editorUpdateDomStatus(){
   const mobs = getEditorMobSpawnsFor(id);
   const mi = findMobSpawnIndexAt(mobs, tx, ty);
   const mtxt = (mi !== -1) ? (()=>{ const sp=mobs[mi]; const nm = mobCatalog?.[sp.type]?.name || sp.type; const ct = (sp.count|0)||1; return `${nm} x${ct}`; })() : "—";
-  el.textContent = `Cursor: (${tx},${ty}) • Ground:${g} • Obj:${o} • Z:${z} • Gate:${zg} • Mob:${mtxt}`;
+  const pidx = editorGetPortalIndexAt(tx, ty);
+  const ptxt = (pidx !== -1) ? editorPortalSummary(portals[pidx]) : "Portal:—";
+  const modeTxt = editorStandaloneMapId ? ` • Preview:${editorStandaloneMapId} • Cam:${Math.floor(camX/TILE_SIZE)},${Math.floor(camY/TILE_SIZE)}` : "";
+  el.textContent = `Cursor: (${tx},${ty}) • Ground:${g} • Obj:${o} • Z:${z} • Gate:${zg} • Mob:${mtxt} • ${ptxt}${modeTxt}`;
 }
 
 function editorTileThumbCanvas(tile, layer){
@@ -1958,6 +2373,12 @@ function editorBuildTileGrid(){
   }
 
   grid.innerHTML = "";
+  if (editorLayer === "portals") {
+    grid.innerHTML = '<div class="editor-meta">Portal tool active. Click a tile to create/select a portal. Right click deletes. Use the Portal panel below to edit destination map, coordinates, and hidden state.</div>';
+    const meta = document.getElementById("editorMeta");
+    if (meta) meta.textContent = 'Portal tool • Left click selects/creates portal • Right click deletes portal';
+    return;
+  }
   const sel = editorSelectedTile();
 
   for (const tile of filtered) {
@@ -1970,6 +2391,7 @@ function editorBuildTileGrid(){
       editorSetTileIndexByValue(tile);
       editorBuildTileGrid();
     editorUpdateMobPropsPanel();
+    editorUpdatePortalPanel();
       editorUpdateDomHeader();
       const meta = document.getElementById("editorMeta");
       if (meta) meta.textContent = (editorLayer === "mobs") ? `Selected mob:  • Left click places/selects, Shift+click overwrites, Right click removes` : `Selected: ${editorLayer} tile ${tile} • Left click paints, Right click erases`;
@@ -1986,7 +2408,10 @@ function editorInitDomPanelOnce(){
   const gridBtn  = document.getElementById("editorGridBtn");
   const collBtn  = document.getElementById("editorCollBtn");
   const expBtn   = document.getElementById("editorExportBtn");
+  const returnBtn = document.getElementById("editorReturnLiveBtn");
   const search   = document.getElementById("editorSearch");
+  const createBtn = document.getElementById("editorCreateMapBtn");
+  const newMapIdInput = document.getElementById("editorNewMapId");
 
   layerBtn?.addEventListener("click", () => {
     editorNextLayer();
@@ -1997,6 +2422,7 @@ function editorInitDomPanelOnce(){
     editorUpdateDomHeader();
     editorBuildTileGrid();
     editorUpdateMobPropsPanel();
+    editorUpdatePortalPanel();
   });
 
   gridBtn?.addEventListener("click", () => {
@@ -2014,10 +2440,25 @@ editorUpdateDomHeader();
   });
 
   expBtn?.addEventListener("click", () => {
-    exportCurrentMapToClipboard();
+    saveCurrentMapToServer();
+  });
+  returnBtn?.addEventListener("click", () => {
+    editorReturnToLiveMap();
+  });
+
+  createBtn?.addEventListener("click", () => {
+    editorCreateNewMapFromInputs();
+  });
+  newMapIdInput?.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      editorCreateNewMapFromInputs();
+    }
   });
 
   search?.addEventListener("input", () => editorBuildTileGrid());
+  editorFetchMapList();
+  editorRefreshLiveModeUi();
 
   // Mob properties panel (only active on Layer: MOBS)
   const mobPropsBox = document.getElementById("editorMobProps");
@@ -2046,6 +2487,34 @@ editorUpdateDomHeader();
   wireMobInput("mobPropAggroSpeed");
   wireMobInput("mobPropMaxHp");
 
+  const portalSaveBtn = document.getElementById("portalPropSave");
+  const portalDeleteBtn = document.getElementById("portalPropDelete");
+  for (const id of ["portalPropX","portalPropY","portalPropTo","portalPropToX","portalPropToY","portalPropHidden"]) {
+    const el = document.getElementById(id);
+    if (!el) continue;
+    const fn = () => editorApplyPortalFromInputs();
+    el.addEventListener("input", fn);
+    el.addEventListener("change", fn);
+  }
+  portalSaveBtn?.addEventListener("click", () => {
+    if (!editorStandaloneMapId) {
+      levelToastText = 'Load a local map first to edit portals safely';
+      levelToastUntilMs = performance.now() + 2600;
+      return;
+    }
+    if (editorApplyPortalFromInputs()) {
+      levelToastText = 'Portal updated';
+      levelToastUntilMs = performance.now() + 1800;
+    }
+  });
+  portalDeleteBtn?.addEventListener("click", () => {
+    const p = editorGetSelectedPortal();
+    if (!p) return;
+    editorDeletePortalAt(p.x, p.y);
+    levelToastText = 'Portal removed';
+    levelToastUntilMs = performance.now() + 1800;
+  });
+
   applyDefaultsBtn?.addEventListener("click", () => {
     const sel = editorGetSelectedSpawn();
     if (!sel || !sel.sp) return;
@@ -2071,6 +2540,7 @@ editorUpdateDomHeader();
 
   // Initial visibility sync
   if (mobPropsBox) editorUpdateMobPropsPanel();
+  editorUpdatePortalPanel();
 
 }
 
@@ -2083,6 +2553,7 @@ function exportCurrentMapToClipboardHotkey(){
 
 // send tile edit to server (server will validate)
 function sendEditTile(layer, tx, ty, tile) {
+  if (editorStandaloneMapId) return; // local preview edits should not touch the live server map
   wsSend({ type: "editTile", layer, x: tx, y: ty, tile });
 }
 
@@ -2229,22 +2700,12 @@ function showExportOverlay(txt) {
   }, 0);
 }
 
-async function exportCurrentMapToClipboard() {
-  if (!map) return;
+function buildCurrentMapJson() {
+  if (!map) return null;
 
-  // Use whatever your client already tracks as the "current map id"
-  // If yours is named differently, swap this line only.
   const id = (typeof currentMapId !== "undefined") ? currentMapId
            : (typeof currentMap !== "undefined" && currentMap?.id != null) ? currentMap.id
            : 1;
-
-  // If your maps are numeric (1/2/3/4), this makes makeMapA/B/C/D automatically.
-  // If your ids are strings (like "mapA"), see note below.
-  const letter = (typeof id === "number" && id >= 1 && id <= 26)
-    ? String.fromCharCode(64 + id)
-    : String(id);
-
-  const fnName = `makeMap${letter}`;
 
   const w = map?.[0]?.length || 0;
   const h = map?.length || 0;
@@ -2254,76 +2715,56 @@ async function exportCurrentMapToClipboard() {
   const z = zMap || Array.from({ length: h }, () => Array(w).fill(0));
   const zGate = zGateMap || Array.from({ length: h }, () => Array(w).fill(0));
 
-  // Editor-only mob spawns (purely authoring data)
-// Primary source: editorMobSpawnsByMapId (what you paint in the editor)
-// Fallback source: currentMap.mobSpawns (so legacy map data still exports even if you never "touched" mobs in-editor)
   const mobs = (() => {
     const mapKey = String(id);
-
-    // Base authored mob spawns from the map data (legacy)
     const baseList = (typeof currentMap !== "undefined" && currentMap && Array.isArray(currentMap.mobSpawns))
       ? currentMap.mobSpawns
       : [];
-
-    // If this map has been edited in the Mobs layer (add/delete/edit), export EXACTLY what the editor has (even if empty).
-    // Otherwise, export the legacy authored list unchanged.
     const editorList = getEditorMobSpawnsFor(mapKey) || [];
     const touched = editorMobSpawnsTouched.has(mapKey);
-
     if (touched) return editorList;
-
-    // If legacy has nothing and somehow we have editor entries without being marked touched, fall back to editor entries.
     return (baseList && baseList.length) ? baseList : editorList;
-})();;
+  })();
 
-  const mobSpawns = mobs.map((s, i) => {
+  const mobSpawns = mobs.map((s) => {
     const mobType = (s && (s.mobType ?? s.type)) ?? "unknown";
     const tx = (s && (Number.isFinite(s.tx) ? s.tx : (Number.isFinite(s.x) ? s.x : undefined)));
     const ty = (s && (Number.isFinite(s.ty) ? s.ty : (Number.isFinite(s.y) ? s.y : undefined)));
     const out = {
-      // id is optional; server will auto-generate if missing
       ...(s && s.id ? { id: s.id } : {}),
       ...(s && s.mapId ? { mapId: s.mapId } : {}),
       mobType,
       ...(Number.isFinite(tx) ? { tx } : {}),
       ...(Number.isFinite(ty) ? { ty } : {}),
     };
-    // Preserve any optional tuning knobs if present on the editor object
     if (s && s.speedMul != null) out.speedMul = s.speedMul;
     if (s && s.aggroSpeedMul != null) out.aggroSpeedMul = s.aggroSpeedMul;
     if (s && s.passiveUntilHit != null) out.passiveUntilHit = s.passiveUntilHit;
-          if (s.count != null) out.count = s.count;
-          if (s.respawnSec != null) out.respawnSec = s.respawnSec;
-          if (s.leash != null) out.leash = s.leash;
-          if (s.maxHp != null) out.maxHp = s.maxHp;
-          if (s.aggroRadius != null) out.aggroRadius = s.aggroRadius;
+    if (s && s.count != null) out.count = s.count;
+    if (s && s.respawnSec != null) out.respawnSec = s.respawnSec;
+    if (s && s.leash != null) out.leash = s.leash;
+    if (s && s.maxHp != null) out.maxHp = s.maxHp;
+    if (s && s.aggroRadius != null) out.aggroRadius = s.aggroRadius;
     return out;
   });
 
+  const portalList = (typeof portals !== "undefined" && Array.isArray(portals)) ? portals.map(p => editorNormalizePortal(p, p?.x, p?.y)) : [];
 
-  // If your client has portals synced, include them; otherwise export empty list
-  const portalList = (typeof portals !== "undefined" && Array.isArray(portals)) ? portals : [];
-
-  // Export NPC placements if available. Prefer worldNpcs snapshot (it often includes sprite/name),
-  // otherwise fall back to rendered entities list.
   function snapCenteredTile(v) {
-    // If v looks like N+0.5 (tile-center), convert to N. Keep real fractional tiles intact.
     const frac = v - Math.floor(v);
     if (Math.abs(frac - 0.5) < 1e-6) return v - 0.5;
     return v;
   }
 
   const npcList = (() => {
-    // 1) If the game has a worldNpcs snapshot, export from it.
     if (typeof worldNpcs !== "undefined" && worldNpcs && typeof worldNpcs === "object") {
       const out = [];
-      for (const [id, n] of Object.entries(worldNpcs)) {
+      for (const [npcId, n] of Object.entries(worldNpcs)) {
         if (!n) continue;
-        // Prefer tx/ty if present; otherwise derive from x/y pixel coords.
         const tx = Number.isFinite(n.tx) ? n.tx : (Number.isFinite(n.x) ? snapCenteredTile(n.x / TILE_SIZE) : 0);
-    const ty = Number.isFinite(n.ty) ? n.ty : (Number.isFinite(n.y) ? snapCenteredTile(n.y / TILE_SIZE) : 0);
+        const ty = Number.isFinite(n.ty) ? n.ty : (Number.isFinite(n.y) ? snapCenteredTile(n.y / TILE_SIZE) : 0);
         out.push({
-          id: String(n.id ?? id),
+          id: String(n.id ?? npcId),
           name: String(n.name ?? n.npcName ?? "NPC"),
           tx: Math.round(tx * 100) / 100,
           ty: Math.round(ty * 100) / 100,
@@ -2333,7 +2774,6 @@ async function exportCurrentMapToClipboard() {
       return out;
     }
 
-    // 2) Fallback: derive from render entities (may only have id + position).
     const ents = (typeof entities !== "undefined" && Array.isArray(entities)) ? entities : [];
     const out = [];
     for (const e of ents) {
@@ -2351,50 +2791,80 @@ async function exportCurrentMapToClipboard() {
     return out;
   })();
 
-  const payload =
-`// Paste into maps_data.js
-export function ${fnName}() {
-  const w = ${w};
-  const h = ${h};
-
-  const map = ${JSON.stringify(ground)};
-  const obj = ${JSON.stringify(objects)};
-  const z = ${JSON.stringify(z)};
-  const zGate = ${JSON.stringify(zGate)};
-
-  const portals = ${JSON.stringify(portalList, null, 2)};
-  const npcs = ${JSON.stringify(npcList, null, 2)};
-  const mobSpawns = ${JSON.stringify(mobSpawns, null, 2)};
-
-  return { id: ${JSON.stringify(id)}, w, h, map, obj, z, zGate, portals, npcs, mobSpawns };
+  return {
+    id: String(id),
+    w,
+    h,
+    map: ground,
+    obj: objects,
+    z,
+    zGate,
+    portals: portalList,
+    npcs: npcList,
+    mobSpawns,
+  };
 }
-`;
+
+async function saveCurrentMapToServer() {
+  const payload = buildCurrentMapJson();
+  if (!payload) return;
+
+  try {
+    const resp = await fetch(`/api/maps/${encodeURIComponent(payload.id)}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+
+    let data = null;
+    try { data = await resp.json(); } catch {}
+
+    if (!resp.ok) {
+      throw new Error(data?.error || `HTTP ${resp.status}`);
+    }
+
+    if (!editorMapList.includes(String(payload.id))) {
+      editorMapList.push(String(payload.id));
+      editorMapList.sort(editorMapSort);
+    }
+    editorRenderMapList();
+    levelToastText = `Saved ${data?.file || `${payload.id}.json`}`;
+    levelToastUntilMs = performance.now() + 2500;
+  } catch (err) {
+    console.warn("Save map failed:", err);
+    levelToastText = `Save failed: ${err?.message || "Unknown error"}`;
+    levelToastUntilMs = performance.now() + 3500;
+  }
+}
+
+async function exportCurrentMapToClipboard() {
+  const payloadObj = buildCurrentMapJson();
+  if (!payloadObj) return;
+  const payload = JSON.stringify(payloadObj, null, 2);
 
   console.log(payload);
 
   let copied = false;
-try {
-  // Modern API (works on https / localhost with permission)
-  if (navigator.clipboard && (window.isSecureContext || location.hostname === "localhost")) {
-    await navigator.clipboard.writeText(payload);
-    copied = true;
+  try {
+    if (navigator.clipboard && (window.isSecureContext || location.hostname === "localhost")) {
+      await navigator.clipboard.writeText(payload);
+      copied = true;
+    }
+  } catch (err) {
+    copied = false;
   }
-} catch (err) {
-  copied = false;
-}
 
-// Fallback for http / blocked clipboard contexts
-if (!copied) copied = fallbackCopyTextToClipboard(payload);
+  if (!copied) copied = fallbackCopyTextToClipboard(payload);
 
-if (copied) {
-  levelToastText = "Exported makeMap() to clipboard (also logged to console)";
-  levelToastUntilMs = performance.now() + 2500;
-} else {
-  console.warn("Clipboard blocked — showing export overlay");
-  levelToastText = "Clipboard blocked — showing export box";
-  levelToastUntilMs = performance.now() + 2500;
-  showExportOverlay(payload);
-}
+  if (copied) {
+    levelToastText = "Map JSON copied to clipboard";
+    levelToastUntilMs = performance.now() + 2500;
+  } else {
+    console.warn("Clipboard blocked — showing export overlay");
+    levelToastText = "Clipboard blocked — showing export box";
+    levelToastUntilMs = performance.now() + 2500;
+    showExportOverlay(payload);
+  }
 }
 
 
@@ -3197,9 +3667,10 @@ let portalWaitTimer = 0;
 let nextPortalAtMs = 0;
 const PORTAL_COOLDOWN_MS = 450;
 
-const FADE_OUT_DUR = 0.18;
-const FADE_IN_DUR  = 0.18;
+const FADE_OUT_DUR = 0.01;
+const FADE_IN_DUR  = 0.2;
 
+const MIN_BLACK_HOLD = 0.10;
 function startPortalFade() {
   if (fadeState !== "none") return;
 
@@ -3212,6 +3683,7 @@ function startPortalFade() {
   fadeA = 0;
   portalSent = false;
   portalWaitTimer = 0;
+  mapChangeSeenDuringFade = false;
 
   // Send portal request immediately
   portalSent = true;
@@ -3237,8 +3709,15 @@ function updateFade(dt) {
     fadeA = 1;
     portalWaitTimer += dt;
 
+    // If the map changed, hold black for a minimum time, then fade in.
+    if (mapChangeSeenDuringFade && portalWaitTimer >= MIN_BLACK_HOLD) {
+      fadeState = "fadingIn";
+      fadeTimer = 0;
+      return;
+    }
+
     // Safety fallback — never stay black forever
-    if (portalWaitTimer > 1.2) {
+    if (portalWaitTimer > 1.8) {
       fadeState = "fadingIn";
       fadeTimer = 0;
       levelToastText = "Portal failed — stand fully on portal and press E";
@@ -3251,6 +3730,7 @@ function updateFade(dt) {
       fadeA = 0;
     }
   }
+  syncViewportFade();
 }
 
 function drawFadeOverlay() {
@@ -3260,6 +3740,61 @@ function drawFadeOverlay() {
   ctx.fillStyle = "#000";
   ctx.fillRect(0, 0, canvas.width, canvas.height);
   ctx.restore();
+}
+
+let viewportFadeEl = null;
+let viewportFadeLabelEl = null;
+let connectFadeHold = false;
+let connectFadeStartMs = 0;
+let mapChangeSeenDuringFade = false;
+
+function ensureViewportFade() {
+  if (viewportFadeEl) return viewportFadeEl;
+  const el = document.createElement("div");
+  el.id = "viewportFadeOverlay";
+  el.style.position = "fixed";
+  el.style.inset = "0";
+  el.style.background = "#000";
+  el.style.opacity = "0";
+  el.style.pointerEvents = "none";
+  // Fast in/out, then we hold black in code for MIN_BLACK_HOLD
+  el.style.transition = "opacity 120ms linear";
+  el.style.zIndex = "9999";
+  document.body.appendChild(el);
+  viewportFadeEl = el;
+  viewportFadeLabelEl = null;
+  return el;
+}
+
+function setViewportFade(visible) {
+  const el = ensureViewportFade();
+  el.style.opacity = visible ? "1" : "0";
+  el.style.pointerEvents = visible ? "auto" : "none";
+}
+
+function setConnectFadeHold(hold) {
+  if (hold) {
+    connectFadeHold = true;
+    connectFadeStartMs = performance.now();
+    syncViewportFade();
+    return;
+  }
+  // Enforce minimum black hold to make transitions feel deliberate
+  const elapsed = performance.now() - (connectFadeStartMs || 0);
+  if (connectFadeHold && elapsed < MIN_BLACK_HOLD * 1000) {
+    const wait = (MIN_BLACK_HOLD * 1000) - elapsed;
+    setTimeout(() => {
+      setConnectFadeHold(false);
+    }, Math.max(0, Math.round(wait)));
+    return;
+  }
+  connectFadeHold = false;
+  syncViewportFade();
+}
+
+function syncViewportFade() {
+  const active = connectFadeHold || fadeA > 0.02;
+  setViewportFade(active);
 }
 /* ======================
    NETWORK
@@ -3753,6 +4288,7 @@ function finalizeReturnToCharacterSelect(preserveName = null) {
   if (selectedCharacterName) {
     try { updatePreviewForName(selectedCharacterName); } catch {}
   }
+  setConnectFadeHold(false);
   openTitleScreen("select");
 }
 
@@ -3785,6 +4321,9 @@ function beginCharacterSession(name, mode = "load") {
   pendingCharacterMode = joinMode;
   myName = clean;
   setTitleScreenError("");
+  connectFadeHold = true;
+  connectFadeStartMs = performance.now();
+  syncViewportFade();
 
   if (ws && ws.readyState === 1) {
     ws.send(JSON.stringify({ type: "setName", name: clean, mode: joinMode }));
@@ -4481,6 +5020,7 @@ function handleWsMessage(e) {
     nameSent = false;
     pendingCharacterName = null;
     pendingCharacterMode = null;
+    setConnectFadeHold(false);
     openTitleScreen(titleScreenState === "create" ? "create" : "select");
     setTitleScreenError(msg.reason || "That name was rejected by the server.");
     return;
@@ -4496,6 +5036,7 @@ function handleWsMessage(e) {
     if (acceptedMode === "create") {
       suppressAutoJoin = true;
       selectedCharacterName = myName || selectedCharacterName || null;
+      setConnectFadeHold(false);
       disconnectCharacterSession();
       try { updatePreviewForName(selectedCharacterName || null); } catch {}
       openTitleScreen("select");
@@ -4580,21 +5121,24 @@ if (msg.type === "skill3Fx") {
 
   if (msg.type === "welcome") {
     myId = msg.id;
-    map = msg.map;
-    objMap = msg.objMap || objMap;
-    if (msg.zMap) zMap = msg.zMap;
-    if (msg.zGateMap) zGateMap = msg.zGateMap;
-    if (Array.isArray(msg.portals)) portals = msg.portals;
+    if (!editorStandaloneMapId) {
+      map = msg.map;
+      objMap = msg.objMap || objMap;
+      if (msg.zMap) zMap = msg.zMap;
+      if (msg.zGateMap) zGateMap = msg.zGateMap;
+      if (!editorStandaloneMapId && Array.isArray(msg.portals)) portals = msg.portals;
 
-    currentMapId = msg.mapId ?? currentMapId;
+      currentMapId = msg.mapId ?? currentMapId;
 
-    // Keep authored map metadata (for editor export fallbacks)
-    if (msg.mapId != null) {
-      const ms = Array.isArray(msg.mobSpawns) ? msg.mobSpawns : [];
-      currentMap = { id: msg.mapId, mobSpawns: ms };
-      seedEditorMobSpawns(msg.mapId, ms);
+      // Keep authored map metadata (for editor export fallbacks)
+      if (msg.mapId != null) {
+        const ms = Array.isArray(msg.mobSpawns) ? msg.mobSpawns : [];
+        currentMap = { id: msg.mapId, mobSpawns: ms };
+        seedEditorMobSpawns(msg.mapId, ms);
+      }
     }
 
+    setConnectFadeHold(false);
     if (typeof msg.tileSize === "number") TILE_SIZE = msg.tileSize;
     if (typeof msg.portalTile === "number") PORTAL_TILE = msg.portalTile;
     if (msg.mobCatalog && typeof msg.mobCatalog === "object") { mobCatalog = msg.mobCatalog; rebuildEditorMobTypes(); }
@@ -4632,15 +5176,15 @@ if (msg.type === "skill3Fx") {
 
     const now = performance.now() / 1000;
 
-    const newMapId = msg.mapId ?? currentMapId;
-    const mapChanged = (currentMapId != null && newMapId !== currentMapId);
+    const newMapId = editorStandaloneMapId || (msg.mapId ?? currentMapId);
+    const mapChanged = (!editorStandaloneMapId && currentMapId != null && newMapId !== currentMapId);
     currentMapId = newMapId;
 
     // Update authored metadata when provided (server now includes mobSpawns).
     // Only *seed* the editor list when entering a map (or first time we learn its spawns),
     // so an intentional in-editor clear (empty list) isn't undone by the next snapshot.
     const hasMobSpawns = Array.isArray(msg.mobSpawns);
-    if (hasMobSpawns || mapChanged || !currentMap || currentMap.id !== newMapId) {
+    if (!editorStandaloneMapId && (hasMobSpawns || mapChanged || !currentMap || currentMap.id !== newMapId)) {
       const ms = hasMobSpawns ? msg.mobSpawns : (currentMap?.mobSpawns || []);
       currentMap = { id: newMapId, mobSpawns: ms };
       if (mapChanged || !editorMobSpawnsByMapId.has(String(newMapId))) {
@@ -4648,10 +5192,10 @@ if (msg.type === "skill3Fx") {
       }
     }
 
-    if (msg.map) map = msg.map;
-    if (msg.objMap) objMap = msg.objMap;
-    if (msg.zMap) zMap = msg.zMap;
-    if (msg.zGateMap) zGateMap = msg.zGateMap;
+    if (!editorStandaloneMapId && msg.map) map = msg.map;
+    if (!editorStandaloneMapId && msg.objMap) objMap = msg.objMap;
+    if (!editorStandaloneMapId && msg.zMap) zMap = msg.zMap;
+    if (!editorStandaloneMapId && msg.zGateMap) zGateMap = msg.zGateMap;
 
 if (Array.isArray(msg.whirlpools)) whirlpools = msg.whirlpools;
     if (msg.selfMonsterBook && typeof msg.selfMonsterBook === "object") monsterBook = msg.selfMonsterBook;
@@ -4701,13 +5245,14 @@ if (Array.isArray(msg.whirlpools)) whirlpools = msg.whirlpools;
 
     }
 
-    objMap = msg.objMap || objMap;
-    if (Array.isArray(msg.portals)) portals = msg.portals;
+    if (!editorStandaloneMapId && msg.objMap) objMap = msg.objMap;
+    if (!editorStandaloneMapId && Array.isArray(msg.portals)) portals = msg.portals;
 
+    setConnectFadeHold(false);
     if (typeof msg.tileSize === "number") TILE_SIZE = msg.tileSize;
     if (typeof msg.portalTile === "number") PORTAL_TILE = msg.portalTile;
 
-    worldPlayers = msg.players || {};
+    worldPlayers = editorStandaloneMapId ? {} : (msg.players || {});
 
     // Update local character preview meta (level/equipment) for menus
     try {
@@ -4726,12 +5271,12 @@ if (Array.isArray(msg.whirlpools)) whirlpools = msg.whirlpools;
       }
     } catch {}
 
-    worldNpcs = msg.npcs || {};
+    worldNpcs = editorStandaloneMapId ? {} : (msg.npcs || {});
     const prevMobs = worldMobs;
-    worldMobs = msg.mobs || {};
-    worldDrops = msg.drops || {};
+    worldMobs = editorStandaloneMapId ? {} : (msg.mobs || {});
+    worldDrops = editorStandaloneMapId ? {} : (msg.drops || {});
     syncDropAnimFromSnapshot(worldDrops);
-    worldProjectiles = msg.projectiles || {};
+    worldProjectiles = editorStandaloneMapId ? {} : (msg.projectiles || {});
 
     // Skill 6: Healing Cloud – capture our own active-until timer from snapshot
     if (typeof myId !== "undefined" && worldPlayers) {
@@ -4776,9 +5321,12 @@ if (Array.isArray(msg.whirlpools)) whirlpools = msg.whirlpools;
     familiarStates.clear();
     familiarTrails.clear();
 
-	  // Always resolve fade if map actually changed
-	  fadeState = "fadingIn";
-	  fadeTimer = 0;
+    // Resolve portal fade only after we have stayed black for a moment.
+    mapChangeSeenDuringFade = true;
+    if (fadeState === "waitingMap" && portalWaitTimer >= MIN_BLACK_HOLD) {
+      fadeState = "fadingIn";
+      fadeTimer = 0;
+    }
 	}
 
     return;
@@ -5429,16 +5977,27 @@ window.addEventListener("keydown", (e) => {
       editorTileIndex = 0;
       const list = editorAllowedList();
       if (list.length) editorSetTileIndexByValue(list[0]);
-      levelToastText = editorOpen ? "Editor ON (TAB layer, [ ] tile, Ctrl+E export)" : "Editor OFF";
+      levelToastText = editorOpen ? "Editor ON (TAB layer, [ ] tile, Ctrl+E export, wheel/drag/arrow keys pan)" : "Editor OFF";
       levelToastUntilMs = performance.now() + 2200;
 
       // Off-canvas editor panel
       editorInitDomPanelOnce();
       setEditorPanelVisible(editorOpen);
       editorUpdateDomHeader();
-      if (editorOpen) editorBuildTileGrid();
+      if (editorOpen) {
+        editorBuildTileGrid();
+        editorFetchMapList();
+      }
     }
     return;
+  }
+
+  if (editorOpen && editorStandaloneMapId) {
+    const panStep = e.shiftKey ? TILE_SIZE * 4 : TILE_SIZE * 2;
+    if (key === "ArrowLeft" || key.toLowerCase() === "a") { e.preventDefault(); editorPanCamera(-panStep, 0); return; }
+    if (key === "ArrowRight" || key.toLowerCase() === "d") { e.preventDefault(); editorPanCamera(panStep, 0); return; }
+    if (key === "ArrowUp" || key.toLowerCase() === "w") { e.preventDefault(); editorPanCamera(0, -panStep); return; }
+    if (key === "ArrowDown" || key.toLowerCase() === "s") { e.preventDefault(); editorPanCamera(0, panStep); return; }
   }
 
   // Debug collision overlay
@@ -5647,13 +6206,18 @@ canvas.addEventListener("contextmenu", (e) => {
 canvas.addEventListener("mousemove", (e) => {
   if (!editorOpen) return;
   const { mx, my } = getMouseCanvasFromEvent(e);
+  if (editorPanDragging && editorStandaloneMapId) {
+    editorPanCamera(editorPanLastX - mx, editorPanLastY - my);
+    editorPanLastX = mx;
+    editorPanLastY = my;
+  }
   editorMouseX = mx;
   editorMouseY = my;
   editorMouseHas = true;
   editorUpdateDomStatus();
 });
 
-canvas.addEventListener("mouseleave", () => { editorMouseHas = false; });
+canvas.addEventListener("mouseleave", () => { editorMouseHas = false; editorPanDragging = false; });
 
 // Inventory tooltip hover reset
 canvas.addEventListener("mouseleave", () => { uiMouse.has = false; });
@@ -5677,6 +6241,13 @@ canvas.addEventListener("mousedown", (e) => {
 
   const { mx, my } = getMouseCanvasFromEvent(e);
 
+  if (editorStandaloneMapId && (e.button === 1 || (e.button === 0 && (e.shiftKey || e.altKey)))) {
+    editorPanDragging = true;
+    editorPanLastX = mx;
+    editorPanLastY = my;
+    return;
+  }
+
   if (!map) return;
   const tx = Math.floor((camX + mx) / TILE_SIZE);
   const ty = Math.floor((camY + my) / TILE_SIZE);
@@ -5684,6 +6255,27 @@ canvas.addEventListener("mousedown", (e) => {
 
   const isRight = (e.button === 2);
   const tile = isRight ? 0 : editorSelectedTile();
+
+  if (editorLayer === "portals") {
+    if (!editorStandaloneMapId) {
+      levelToastText = 'Load a map from the left panel before editing portals';
+      levelToastUntilMs = performance.now() + 2600;
+      return;
+    }
+    if (isRight) {
+      if (editorDeletePortalAt(tx, ty)) {
+        levelToastText = `Deleted portal at (${tx},${ty})`;
+        levelToastUntilMs = performance.now() + 1800;
+      }
+      return;
+    }
+    const idx = editorSelectPortalAt(tx, ty, true);
+    if (idx !== -1) {
+      levelToastText = `Selected portal at (${tx},${ty})`;
+      levelToastUntilMs = performance.now() + 1500;
+    }
+    return;
+  }
 
   if (editorLayer === "ground") {
     // keep portals/statues intact (server also validates)
@@ -6277,6 +6869,16 @@ window.addEventListener("mousemove", (e) => {
 
 
 window.addEventListener("wheel", (e) => {
+  if (!editorOpen || !editorStandaloneMapId || !map) return;
+  const rect = canvas.getBoundingClientRect();
+  if (e.clientX < rect.left || e.clientX > rect.right || e.clientY < rect.top || e.clientY > rect.bottom) return;
+  e.preventDefault();
+  const dx = e.shiftKey ? e.deltaY : e.deltaX;
+  const dy = e.shiftKey ? 0 : e.deltaY;
+  editorPanCamera(dx, dy);
+}, { passive: false });
+
+window.addEventListener("wheel", (e) => {
   if (!monsterBookOpen || !bookUI) return;
   const { mx, my } = getMouseCanvasFromEvent(e);
   const c = bookUI.content;
@@ -6289,6 +6891,7 @@ window.addEventListener("wheel", (e) => {
 
 
 window.addEventListener("mouseup", (e) => {
+  editorPanDragging = false;
   // Stop hold-to-attack on left button release.
   if (attackHoldDown && (!e || e.button === 0)) {
     attackHoldDown = false;
@@ -6410,6 +7013,11 @@ function getWorldSize() {
 }
 
 function updateCamera() {
+  if (editorOpen && editorStandaloneMapId && map) {
+    editorClampCamera();
+    return;
+  }
+
   const me = getMyPos();
   if (!me || !map) return;
 
@@ -8312,7 +8920,40 @@ function drawEditorOverlay() {
     }
   }
 
-
+  if (editorLayer === "portals") {
+    const selected = editorSelectedPortal;
+    for (const p of (Array.isArray(portals) ? portals : [])) {
+      if (!p) continue;
+      const x = p.x | 0;
+      const y = p.y | 0;
+      if (x < startTx || x > endTx || y < startTy || y > endTy) continue;
+      const px = x * TILE_SIZE;
+      const py = y * TILE_SIZE;
+      const isSel = !!selected && (selected.x | 0) === x && (selected.y | 0) === y;
+      ctx.save();
+      ctx.fillStyle = p.hidden ? 'rgba(255, 210, 80, 0.18)' : 'rgba(120, 180, 255, 0.18)';
+      ctx.fillRect(px, py, TILE_SIZE, TILE_SIZE);
+      ctx.lineWidth = isSel ? 3 : 2;
+      ctx.strokeStyle = isSel ? 'rgba(255,255,255,0.95)' : (p.hidden ? 'rgba(255,210,80,0.95)' : 'rgba(120,180,255,0.95)');
+      ctx.strokeRect(px + 1, py + 1, TILE_SIZE - 2, TILE_SIZE - 2);
+      ctx.font = 'bold 12px system-ui, sans-serif';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.lineWidth = 4;
+      ctx.strokeStyle = 'rgba(0,0,0,0.65)';
+      ctx.fillStyle = 'rgba(255,255,255,0.95)';
+      const label = (p.to && String(p.to).trim()) ? String(p.to).trim().slice(0, 6) : 'P';
+      ctx.strokeText(label, px + TILE_SIZE / 2, py + TILE_SIZE / 2);
+      ctx.fillText(label, px + TILE_SIZE / 2, py + TILE_SIZE / 2);
+      if (Number.isFinite(Number(p.toX)) && Number.isFinite(Number(p.toY))) {
+        ctx.font = '10px system-ui, sans-serif';
+        const sub = `${Number(p.toX)|0},${Number(p.toY)|0}`;
+        ctx.strokeText(sub, px + TILE_SIZE / 2, py + TILE_SIZE - 8);
+        ctx.fillText(sub, px + TILE_SIZE / 2, py + TILE_SIZE - 8);
+      }
+      ctx.restore();
+    }
+  }
 
   if (editorShowGrid) {
     // Grid should be in world-space (aligned to tiles), so we draw it using world coords.

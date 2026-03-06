@@ -266,8 +266,138 @@ function applyRowToPlayer(p, row) {
 /* ======================
    HTTP FILE SERVER
 ====================== */
+const MAPS_DIR = path.join(__dirname, "maps");
+
+function sendJson(res, status, body) {
+  res.writeHead(status, {
+    "Content-Type": "application/json; charset=utf-8",
+    "Cache-Control": "no-store",
+  });
+  res.end(JSON.stringify(body));
+}
+
+function isLocalRequest(req) {
+  const remote = req.socket?.remoteAddress || "";
+  return remote === "127.0.0.1" || remote === "::1" || remote === "::ffff:127.0.0.1";
+}
+
+function sanitizeMapForSave(raw, mapId) {
+  if (!raw || typeof raw !== "object") throw new Error("Request body must be a JSON object.");
+
+  const id = String(raw.id ?? mapId);
+  if (id !== mapId) throw new Error("Map id in body must match the URL.");
+
+  const w = Number(raw.w);
+  const h = Number(raw.h);
+  if (!Number.isInteger(w) || w <= 0) throw new Error("Map width must be a positive integer.");
+  if (!Number.isInteger(h) || h <= 0) throw new Error("Map height must be a positive integer.");
+
+  function normalizeGrid(name, value) {
+    if (!Array.isArray(value) || value.length !== h) {
+      throw new Error(`${name} must be an array with ${h} rows.`);
+    }
+    return value.map((row, y) => {
+      if (!Array.isArray(row) || row.length !== w) {
+        throw new Error(`${name}[${y}] must have ${w} columns.`);
+      }
+      return row.map((cell) => {
+        const n = Number(cell);
+        return Number.isFinite(n) ? n : 0;
+      });
+    });
+  }
+
+  const clean = {
+    id,
+    w,
+    h,
+    map: normalizeGrid("map", raw.map),
+    obj: normalizeGrid("obj", raw.obj ?? Array.from({ length: h }, () => Array(w).fill(0))),
+    z: normalizeGrid("z", raw.z ?? Array.from({ length: h }, () => Array(w).fill(0))),
+    zGate: normalizeGrid("zGate", raw.zGate ?? Array.from({ length: h }, () => Array(w).fill(0))),
+    portals: Array.isArray(raw.portals) ? raw.portals : [],
+    npcs: Array.isArray(raw.npcs) ? raw.npcs : [],
+    mobSpawns: Array.isArray(raw.mobSpawns) ? raw.mobSpawns : [],
+  };
+
+  return clean;
+}
+
+
+function readMapFile(mapId) {
+  const filePath = path.join(MAPS_DIR, `${mapId}.json`);
+  if (!fs.existsSync(filePath)) return null;
+  return JSON.parse(fs.readFileSync(filePath, "utf8"));
+}
+
+function listAvailableMapIds() {
+  if (!fs.existsSync(MAPS_DIR)) return [];
+  return fs.readdirSync(MAPS_DIR)
+    .filter((name) => name.toLowerCase().endsWith(".json"))
+    .map((name) => path.basename(name, ".json"))
+    .filter((id) => /^[A-Za-z0-9_-]+$/.test(id))
+    .sort((a, b) => a.localeCompare(b, undefined, { numeric: true, sensitivity: "base" }));
+}
+
 const server = http.createServer((req, res) => {
-  const requested = req.url === "/" ? "/index.html" : req.url;
+  const parsedUrl = new URL(req.url || "/", `http://${req.headers.host || "localhost"}`);
+
+  if (req.method === "GET" && parsedUrl.pathname === "/api/maps") {
+    try {
+      const maps = listAvailableMapIds().map((id) => ({ id }));
+      return sendJson(res, 200, { maps });
+    } catch (err) {
+      return sendJson(res, 500, { error: err?.message || "Failed to list maps." });
+    }
+  }
+
+  if (req.method === "GET" && /^\/api\/maps\/[^/]+$/.test(parsedUrl.pathname)) {
+    try {
+      const mapId = decodeURIComponent(parsedUrl.pathname.split("/").pop() || "").trim();
+      if (!/^[A-Za-z0-9_-]+$/.test(mapId)) return sendJson(res, 400, { error: "Invalid map id." });
+      const data = readMapFile(mapId);
+      if (!data) return sendJson(res, 404, { error: "Map not found." });
+      return sendJson(res, 200, data);
+    } catch (err) {
+      return sendJson(res, 500, { error: err?.message || "Failed to load map." });
+    }
+  }
+
+  if (req.method === "POST" && /^\/api\/maps\/[^/]+$/.test(parsedUrl.pathname)) {
+    if (!isLocalRequest(req)) {
+      return sendJson(res, 403, { error: "Map saving is only allowed from localhost." });
+    }
+
+    const mapId = decodeURIComponent(parsedUrl.pathname.split("/").pop() || "").trim();
+    if (!/^[A-Za-z0-9_-]+$/.test(mapId)) {
+      return sendJson(res, 400, { error: "Invalid map id." });
+    }
+
+    let body = "";
+    req.setEncoding("utf8");
+    req.on("data", (chunk) => {
+      body += chunk;
+      if (body.length > 10 * 1024 * 1024) req.destroy();
+    });
+    req.on("end", () => {
+      try {
+        const parsed = body ? JSON.parse(body) : null;
+        const clean = sanitizeMapForSave(parsed, mapId);
+        fs.mkdirSync(MAPS_DIR, { recursive: true });
+        const filePath = path.join(MAPS_DIR, `${mapId}.json`);
+        fs.writeFileSync(filePath, JSON.stringify(clean, null, 2) + "\n", "utf8");
+        return sendJson(res, 200, { ok: true, file: `${mapId}.json` });
+      } catch (err) {
+        return sendJson(res, 400, { error: err?.message || "Failed to save map." });
+      }
+    });
+    req.on("error", () => {
+      return sendJson(res, 500, { error: "Failed to read request body." });
+    });
+    return;
+  }
+
+  const requested = parsedUrl.pathname === "/" ? "/index.html" : parsedUrl.pathname;
   const safePath = path.normalize(requested).replace(/^(\.\.[/\\])+/, "");
   const filePath = path.join(__dirname, "public", safePath);
 
@@ -284,6 +414,7 @@ const server = http.createServer((req, res) => {
       ext === ".js" ? "text/javascript" :
       ext === ".css" ? "text/css" :
       ext === ".png" ? "image/png" :
+      ext === ".json" ? "application/json" :
       "application/octet-stream";
 
     res.writeHead(200, { "Content-Type": type });
